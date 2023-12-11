@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+sudo -E PATH="$PATH" \
+    capsh --caps="cap_setuid,cap_setgid+p cap_net_admin+pi" --user="$(whoami)" --addamb=cap_net_admin -- \
+    -c "cargo run ${@@Q}"
