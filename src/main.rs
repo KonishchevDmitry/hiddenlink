@@ -1,38 +1,29 @@
-use std::sync::Arc;
-use std::os::fd::AsRawFd;
-use tokio_tun::Tun;
+#[macro_use] mod core;
+mod tunnel;
+mod util;
 
-fn main() {
-    test();
-}
+use std::io::{self, Write};
+use std::process;
+
+use log::{Level, error};
+
+use crate::core::EmptyResult;
+use crate::tunnel::Tunnel;
 
 #[tokio::main]
-async fn test() {
-    let tun = Arc::new(
-        Tun::builder()
-            .name("test")            // if name is empty, then it is set by kernel.
-            .tap(false)          // false (default): TUN, true: TAP.
-            .packet_info(false)  // false: IFF_NO_PI, default is true.
-            .up()                // or set it up manually using `sudo ip link set <tun-name> up`.
-            .try_build()         // or `.try_build_mq(queues)` for multi-queue support.
-            .unwrap(),
-    );
+async fn run() -> EmptyResult {
+    let tunnel = Tunnel::new("test")?;
+    tunnel.handle().await
+}
 
-    println!("tun created, name: {}, fd: {}", tun.name(), tun.as_raw_fd());
+fn main() {
+    if let Err(e) = easy_logging::init(module_path!().split("::").next().unwrap(), Level::Trace) {
+        let _ = writeln!(io::stderr(), "Failed to initialize the logging: {}.", e);
+        process::exit(1);
+    }
 
-    // let (mut reader, mut _writer) = tokio::io::split(tun);
-
-    // // Writer: simply clone Arced Tun.
-    // let tun_c = tun.clone();
-    // tokio::spawn(async move{
-    //     let buf = b"data to be written";
-    //     tun_c.send_all(buf).await.unwrap();
-    // });
-
-    // Reader
-    let mut buf = [0u8; 1024];
-    loop {
-        let n = tun.recv(&mut buf).await.unwrap();
-        println!("reading {} bytes: {:?}", n, &buf[..n]);
+    if let Err(e) = run() {
+        error!("{}.", e);
+        process::exit(1);
     }
 }
