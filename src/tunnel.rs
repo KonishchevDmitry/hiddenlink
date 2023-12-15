@@ -1,25 +1,35 @@
 use bytes::BytesMut;
 use tokio_tun::Tun;
 
+use crate::{Config, transport};
 use crate::core::{GenericResult, EmptyResult};
+use crate::transport::Transport;
+use crate::transport::udp::UdpTransport;
 use crate::util;
 
 pub struct Tunnel {
     tun: Tun,
+    transports: Vec<Box<dyn Transport>>,
 }
 
 impl Tunnel {
     // FIXME(konishchev): Create by networkd with proper owner
-    pub fn new(name: &str) -> GenericResult<Tunnel> {
+    pub async fn new(config: &Config) -> GenericResult<Tunnel> {
         let tun = Tun::builder()
-            .name(name)
+            .name(&config.name)
             .packet_info(false)
             .address("172.31.0.1".parse()?) // FIXME(konishchev): Do we need to manage it?
             .netmask("255.255.255.0".parse()?)
             .up()
             .try_build()?;
 
-        Ok(Tunnel {tun})
+        // dbg!(&config.transports);
+
+        let transports = vec![
+            UdpTransport::new("127.0.0.1:1234").await?,
+        ];
+
+        Ok(Tunnel {tun, transports})
     }
 
     // FIXME(konishchev): Look at https://github.com/torvalds/linux/blob/master/drivers/net/tun.c

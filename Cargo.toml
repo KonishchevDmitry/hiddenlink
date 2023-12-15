@@ -5,9 +5,15 @@ edition = "2021"
 
 [dependencies]
 bytes = "1.5.0"
+clap = "4.4.11"
+const_format = "0.2.32"
 easy-logging = "0.1.2"
 itertools = "*"
 log = "0.4.20"
 pktparse = "0.7.1"
+serde = "1.0.189"
+serde_derive = "1.0.189"
+serde_yaml = "0.9.25"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 tokio-tun = "0.11.2"
+validator = { version = "0.16.1", features = ["derive"] }

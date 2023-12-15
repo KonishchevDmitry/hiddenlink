@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+set -eu
+
+quoted_args=""
+for arg in "$@"; do
+    quoted_args="$quoted_args ${arg@Q}"
+done
+
 sudo -E PATH="$PATH" \
     capsh --caps="cap_setuid,cap_setgid+p cap_net_admin+pi" --user="$(whoami)" --addamb=cap_net_admin -- \
-    -c "cargo run ${@@Q}"
+    -c "cargo run -- $quoted_args"
