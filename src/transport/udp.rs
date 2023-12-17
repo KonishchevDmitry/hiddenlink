@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -22,7 +23,7 @@ pub struct UdpTransportConfig {
 }
 
 pub struct UdpTransport {
-    peer_address: String,
+    peer_address: SocketAddr,
     socket: UdpSocket,
 }
 
@@ -31,16 +32,15 @@ impl UdpTransport {
         let socket = UdpSocket::bind(&config.bind_address).await.map_err(|e| format!(
             "Failed to bind to {}: {}", config.bind_address, e))?;
 
-        // FIXME(konishchev): HERE
-        // socket.connect(&config.peer_address).await.map_err(|e| format!(
-        //     "Invalid peer address ({}): {}", config.peer_address, e))?;
+        let peer_address = config.peer_address.parse().map_err(|_| format!(
+            "Invalid peer address: {}", config.peer_address))?;
 
         let transport = Arc::new(UdpTransport {
-            peer_address: config.peer_address.clone(),
-            socket
+            peer_address,
+            socket,
         });
 
-        info!("{} is listening on {}.", transport.name(), config.bind_address);
+        info!("[{}] Listening on {}.", transport.name(), config.bind_address);
 
         {
             let transport = transport.clone();
@@ -57,8 +57,6 @@ impl UdpTransport {
         let mut buf = BytesMut::zeroed(1500 - 20 - 8); // MTU - IPv4 - UDP
 
         loop {
-            // FIXME(konishchev): HERE
-            // let size = match self.socket.recv(&mut buf).await {
             let size = match self.socket.recv_from(&mut buf).await {
                 Ok((size, _)) => {
                     if size == 0 {
@@ -94,8 +92,7 @@ impl Transport for UdpTransport {
     }
 
     async fn send(&self, buf: &[u8]) -> EmptyResult {
-        // self.socket.send(buf).await?;
-        self.socket.send_to(buf, &self.peer_address).await?;
+        self.socket.send_to(buf, self.peer_address).await?;
         Ok(())
     }
 }

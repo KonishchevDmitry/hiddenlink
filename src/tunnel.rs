@@ -16,24 +16,17 @@ pub struct Tunnel {
 }
 
 impl Tunnel {
-    // FIXME(konishchev): Create by networkd with proper owner
+    // FIXME(konishchev): Configure MTU in networkd
+    // FIXME(konishchev): Configure MSS in firewall
     pub async fn new(config: &Config) -> GenericResult<Tunnel> {
         info!("Attaching to {} tun device...", config.name);
 
-        let mut tuns = Box::new(Tun::builder()
+        let tun = Arc::new(Tun::builder()
             .name(&config.name)
             .packet_info(false)
-            // FIXME(konishchev): Configure MTU in networkd
-            // .address("172.31.0.1".parse()?) // FIXME(konishchev): Do we need to manage it?
-            // .netmask("255.255.255.0".parse()?)
-            // .up()
-            // .try_build()
-            // XXX(konishchev): HERE
-            .try_build_mq(2) // FIXME(konishchev): https://github.com/yaa110/tokio-tun/pull/19
-            .map_err(|e| format!("Unable to create {:?} tun device: {}", config.name, e))?);
-            // .drain(..).next().unwrap();
-
-        let tun = Arc::new(tuns.pop().unwrap());
+            .try_build_mq(2) // A workaround for https://github.com/yaa110/tokio-tun/pull/19
+            .map_err(|e| format!("Unable to attach to {:?} tun device: {}", config.name, e))?
+            .drain(..).next().unwrap());
 
         let mut transports = Vec::new();
 
@@ -48,13 +41,11 @@ impl Tunnel {
         Ok(Tunnel {tun, transports})
     }
 
-    // FIXME(konishchev): Look at https://github.com/torvalds/linux/blob/master/drivers/net/tun.c
     pub async fn handle(&self) -> EmptyResult {
-        // FIXME(konishchev): HERE
-        info!("Started.");
+        info!("Ready and listening to packets.");
 
-        let mtu = self.tun.mtu().map_err(|e| format!(
-            "Failed to get tunnel MTU: {}", e))?;
+        let mtu = self.tun.mtu()
+            .map_err(|e| format!("Failed to get tunnel MTU: {}", e))?;
 
         let mtu = mtu.try_into().map_err(|_| format!(
             "Got an invalid MTU value: {}", mtu))?;
