@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*.*.*
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build
+      env:
+        CARGO_TERM_COLOR: always
+      run: cargo build --release --locked
+
+    - name: Construct archive name
+      id: archive_name
+      uses: ASzc/change-string-case-action@v5
+      with:
+        string: ${{ format('hiddenlink-{0}-{1}-{2}.tar.bz2', runner.os, runner.arch, github.ref_name) }}
+
+    - name: Create archive
+      shell: bash
+      run: |
+        set -eu
+
+        binary_name=hiddenlink
+        archive_name="${{ steps.archive_name.outputs.lowercase }}"
+
+        mv "target/release/$binary_name" .
+        tar -cjf "$archive_name" "$binary_name"
+
+    - name: Create release
+      uses: svenstaro/upload-release-action@v2
+      with:
+        repo_token: ${{ secrets.GITHUB_TOKEN }}
+        tag: ${{ github.ref }}
+        file: ${{ steps.archive_name.outputs.lowercase }}
