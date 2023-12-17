@@ -1,39 +1,58 @@
+use std::sync::Arc;
+
 use bytes::BytesMut;
+use log::{trace, info};
 use tokio_tun::Tun;
 
-use crate::{Config, transport};
+use crate::config::{Config, TransportConfig};
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
 use crate::transport::udp::UdpTransport;
 use crate::util;
 
 pub struct Tunnel {
-    tun: Tun,
-    transports: Vec<Box<dyn Transport>>,
+    tun: Arc<Tun>,
+    transports: Vec<Arc<dyn Transport>>,
 }
 
 impl Tunnel {
     // FIXME(konishchev): Create by networkd with proper owner
     pub async fn new(config: &Config) -> GenericResult<Tunnel> {
-        let tun = Tun::builder()
+        info!("Attaching to {} tun device...", config.name);
+
+        let mut tuns = Box::new(Tun::builder()
             .name(&config.name)
             .packet_info(false)
-            .address("172.31.0.1".parse()?) // FIXME(konishchev): Do we need to manage it?
-            .netmask("255.255.255.0".parse()?)
-            .up()
-            .try_build()?;
+            // FIXME(konishchev): Configure MTU in networkd
+            // .address("172.31.0.1".parse()?) // FIXME(konishchev): Do we need to manage it?
+            // .netmask("255.255.255.0".parse()?)
+            // .up()
+            // .try_build()
+            // XXX(konishchev): HERE
+            .try_build_mq(2) // FIXME(konishchev): https://github.com/yaa110/tokio-tun/pull/19
+            .map_err(|e| format!("Unable to create {:?} tun device: {}", config.name, e))?);
+            // .drain(..).next().unwrap();
 
-        // dbg!(&config.transports);
+        let tun = Arc::new(tuns.pop().unwrap());
 
-        let transports = vec![
-            UdpTransport::new("127.0.0.1:1234").await?,
-        ];
+        let mut transports = Vec::new();
+
+        for transport_config in &config.transports {
+            let transport = match transport_config {
+                TransportConfig::Udp(config) => UdpTransport::new(config, tun.clone()).await.map_err(|e| format!(
+                    "Failed to initialize UDP transport: {}", e))?,
+            };
+            transports.push(transport);
+        }
 
         Ok(Tunnel {tun, transports})
     }
 
     // FIXME(konishchev): Look at https://github.com/torvalds/linux/blob/master/drivers/net/tun.c
     pub async fn handle(&self) -> EmptyResult {
+        // FIXME(konishchev): HERE
+        info!("Started.");
+
         let mtu = self.tun.mtu().map_err(|e| format!(
             "Failed to get tunnel MTU: {}", e))?;
 
@@ -43,17 +62,27 @@ impl Tunnel {
         let mut buf = BytesMut::zeroed(mtu);
 
         loop {
-            let size = self.tun.recv(&mut buf).await.unwrap();
-            util::trace_packet("tun device", &buf[..size]);
+            let size = self.tun.recv(&mut buf).await.map_err(|e| format!(
+                "Failed to read from tun device: {}", e))?;
+
+            let packet = &buf[..size];
+            util::trace_packet("tun device", packet);
+
+            let transport = self.transports.first().unwrap();
+            if !transport.is_ready() {
+                trace!("Dropping the packet: there are no active transports.");
+                continue;
+            }
+
+            trace!("Sending the packet via {}...", transport.name());
+            match transport.send(packet).await {
+                Ok(_) => {
+                    trace!("The packet sent.")
+                },
+                Err(err) => {
+                    trace!("Failed to send the packet via {}: {}.", transport.name(), err);
+                }
+            }
         }
-
-        // let (mut reader, mut _writer) = tokio::io::split(tun);
-
-        // // Writer: simply clone Arced Tun.
-        // let tun_c = tun.clone();
-        // tokio::spawn(async move{
-        //     let buf = b"data to be written";
-        //     tun_c.send_all(buf).await.unwrap();
-        // });
     }
 }

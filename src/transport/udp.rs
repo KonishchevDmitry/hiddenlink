@@ -1,12 +1,16 @@
-use std::net::SocketAddr;
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use bytes::BytesMut;
+use log::{info, error};
 use serde_derive::{Serialize, Deserialize};
 use tokio::net::UdpSocket;
+use tokio_tun::Tun;
 use validator::Validate;
 
-use crate::core::GenericResult;
+use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
+use crate::util;
 
 #[derive(Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
@@ -18,157 +22,80 @@ pub struct UdpTransportConfig {
 }
 
 pub struct UdpTransport {
+    peer_address: String,
     socket: UdpSocket,
-    // last_peer: Option<SocketAddr>,
 }
 
 impl UdpTransport {
-    pub async fn new(address: &str) -> GenericResult<Box<dyn Transport>> {
-        let socket = UdpSocket::bind(address).await?;
+    pub async fn new(config: &UdpTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
+        let socket = UdpSocket::bind(&config.bind_address).await.map_err(|e| format!(
+            "Failed to bind to {}: {}", config.bind_address, e))?;
 
-    //     let mut buf = [0; 1024];
-    // loop {
-    // let (len, addr) = socket.recv_from(&mut buf).await?;
-    // println!("{:?} bytes received from {:?}", len, addr);
+        // FIXME(konishchev): HERE
+        // socket.connect(&config.peer_address).await.map_err(|e| format!(
+        //     "Invalid peer address ({}): {}", config.peer_address, e))?;
 
-    // let len = sock.send_to(&buf[..len], addr).await?;
-    // println!("{:?} bytes sent", len);
-    // }
+        let transport = Arc::new(UdpTransport {
+            peer_address: config.peer_address.clone(),
+            socket
+        });
 
-        Ok(Box::new(UdpTransport {socket}))
+        info!("{} is listening on {}.", transport.name(), config.bind_address);
+
+        {
+            let transport = transport.clone();
+            tokio::spawn(async move {
+                transport.handle(tun).await
+            });
+        }
+
+        Ok(transport)
     }
 
-    // async fn handle(&self) {
-    //     let mut buf = BytesMut::zeroed(1500 - 20 - 8); // MTU - IPv4 - UDP
-    // }
+    async fn handle(&self, tun: Arc<Tun>) {
+        let name = self.name();
+        let mut buf = BytesMut::zeroed(1500 - 20 - 8); // MTU - IPv4 - UDP
+
+        loop {
+            // FIXME(konishchev): HERE
+            // let size = match self.socket.recv(&mut buf).await {
+            let size = match self.socket.recv_from(&mut buf).await {
+                Ok((size, _)) => {
+                    if size == 0 {
+                        error!("[{}] Got an empty message from the peer.", name);
+                        continue;
+                    }
+                    size
+                },
+                Err(err) => {
+                    error!("[{}] Failed to receive a message from the peer: {}.", name, err);
+                    break;
+                }
+            };
+
+            let packet = &buf[..size];
+            util::trace_packet(&name, packet);
+
+            if let Err(err) = tun.send(packet).await {
+                error!("[{}] Failed to send the packet to tun device: {}.", name, err);
+            }
+        }
+    }
 }
 
+#[async_trait]
 impl Transport for UdpTransport {
+    fn name(&self) -> String {
+        format!("UDP transport to {}", self.peer_address)
+    }
 
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn send(&self, buf: &[u8]) -> EmptyResult {
+        // self.socket.send(buf).await?;
+        self.socket.send_to(buf, &self.peer_address).await?;
+        Ok(())
+    }
 }
-
-    // # Example: one to many (bind)
-    //
-    // Using `bind` we can create a simple echo server that sends and recv's with many different clients:
-    // ```no_run
-    // use tokio::net::UdpSocket;
-    // use std::io;
-    //
-    // #[tokio::main]
-    // async fn main() -> io::Result<()> {
-    //     }
-    // }
-    // ```
-    //
-    // # Example: one to one (connect)
-    //
-    // Or using `connect` we can echo with a single remote address using `send` and `recv`:
-    // ```no_run
-    // use tokio::net::UdpSocket;
-    // use std::io;
-    //
-    // #[tokio::main]
-    // async fn main() -> io::Result<()> {
-    //     let sock = UdpSocket::bind("0.0.0.0:8080").await?;
-    //
-    //     let remote_addr = "127.0.0.1:59611";
-    //     sock.connect(remote_addr).await?;
-    //     let mut buf = [0; 1024];
-    //     loop {
-    //         let len = sock.recv(&mut buf).await?;
-    //         println!("{:?} bytes received from {:?}", len, remote_addr);
-    //
-    //         let len = sock.send(&buf[..len]).await?;
-    //         println!("{:?} bytes sent", len);
-    //     }
-    // }
-    // ```
-    //
-    // # Example: Splitting with `Arc`
-    //
-    // Because `send_to` and `recv_from` take `&self`. It's perfectly alright
-    // to use an `Arc<UdpSocket>` and share the references to multiple tasks.
-    // Here is a similar "echo" example that supports concurrent
-    // sending/receiving:
-    //
-    // ```no_run
-    // use tokio::{net::UdpSocket, sync::mpsc};
-    // use std::{io, net::SocketAddr, sync::Arc};
-    //
-    // #[tokio::main]
-    // async fn main() -> io::Result<()> {
-    //     let sock = UdpSocket::bind("0.0.0.0:8080".parse::<SocketAddr>().unwrap()).await?;
-    //     let r = Arc::new(sock);
-    //     let s = r.clone();
-    //     let (tx, mut rx) = mpsc::channel::<(Vec<u8>, SocketAddr)>(1_000);
-    //
-    //     tokio::spawn(async move {
-    //         while let Some((bytes, addr)) = rx.recv().await {
-    //             let len = s.send_to(&bytes, &addr).await.unwrap();
-    //             println!("{:?} bytes sent", len);
-    //         }
-    //     });
-    //
-    //     let mut buf = [0; 1024];
-    //     loop {
-    //         let (len, addr) = r.recv_from(&mut buf).await?;
-    //         println!("{:?} bytes received from {:?}", len, addr);
-    //         tx.send((buf[..len].to_vec(), addr)).await.unwrap();
-    //     }
-    // }
-    // ```
-    //
-    //
-
-// #[tokio::main]
-// async fn main() {
-//     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
-
-//     loop {
-//         let (socket, _) = listener.accept().await.unwrap();
-//         // A new task is spawned for each inbound socket. The socket is
-//         // moved to the new task and processed there.
-//         tokio::spawn(async move {
-//             process(socket).await;
-//         });
-//     }
-// }
-
-// #[tokio::main]
-// async fn main() {
-//     let handle = tokio::spawn(async {
-//         // Do some async work
-//         "return value"
-//     });
-
-//     // Do some other work
-
-//     let out = handle.await.unwrap();
-//     println!("GOT {}", out);
-// }
-
-// #[tokio::main]
-// async fn main() {
-//     // Bind the listener to the address
-//     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
-
-//     loop {
-//         // The second item contains the IP and port of the new connection.
-//         let (socket, _) = listener.accept().await.unwrap();
-//         process(socket).await;
-//     }
-// }
-
-// async fn process(socket: TcpStream) {
-//     // The `Connection` lets us read/write redis **frames** instead of
-//     // byte streams. The `Connection` type is defined by mini-redis.
-//     let mut connection = Connection::new(socket);
-
-//     if let Some(frame) = connection.read_frame().await.unwrap() {
-//         println!("GOT: {:?}", frame);
-
-//         // Respond with an error
-//         let response = Frame::Error("unimplemented".to_string());
-//         connection.write_frame(&response).await.unwrap();
-//     }
-// }

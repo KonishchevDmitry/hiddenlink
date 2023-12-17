@@ -99,6 +99,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.74"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a66537f1bb974b254c98ed142ff995236e81b9d0fe4db0575f46612cb15eb0f9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.39",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -307,6 +318,26 @@ name = "hermit-abi"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d77f7ec81a6d05a3abb01ab6eb7590f6083d08449fe5a1c8b1e620283546ccb7"
+
+[[package]]
+name = "hiddenlink"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "clap",
+ "const_format",
+ "easy-logging",
+ "itertools",
+ "log",
+ "pktparse",
+ "serde",
+ "serde_derive",
+ "serde_yaml",
+ "tokio",
+ "tokio-tun",
+ "validator",
+]
 
 [[package]]
 name = "iana-time-zone"
@@ -754,25 +785,6 @@ dependencies = [
  "nix",
  "thiserror",
  "tokio",
-]
-
-[[package]]
-name = "tunnel"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "clap",
- "const_format",
- "easy-logging",
- "itertools",
- "log",
- "pktparse",
- "serde",
- "serde_derive",
- "serde_yaml",
- "tokio",
- "tokio-tun",
- "validator",
 ]
 
 [[package]]

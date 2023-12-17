@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# Runs service in devel mode
+#
+
+set -eu
+cd "$(dirname "$(realpath "$0")")/.."
+
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 server|client [args]" >&2
+    exit 1
+fi
+
+name="$1"; shift
+args=("$@")
+
+case "$name" in
+    server)
+        network="172.31.0.1/24"
+        ;;
+
+    client)
+        network="172.31.0.2/24"
+        ;;
+
+    *)
+        echo "Error: Invalid devel role." >&2
+        exit 1
+        ;;
+esac
+
+iface_name="devel-$name"
+
+if [ ! -e "/sys/class/net/$iface_name" ]; then
+    sudo ip tuntap add dev "$iface_name" mode tun user "$(whoami)"
+    sudo ip addr add "$network" dev "$iface_name"
+fi
+
+quoted_args=""
+for arg in "${args[@]}"; do
+    quoted_args="$quoted_args ${arg@Q}"
+done
+
+sudo -E PATH="$PATH" \
+    capsh --caps="cap_setuid,cap_setgid+p cap_net_admin+pi" --user="$(whoami)" --addamb=cap_net_admin -- \
+    -c "cargo run -- --config 'devel/$name.yaml' $quoted_args"
