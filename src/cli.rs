@@ -23,10 +23,9 @@ impl Parser {
     }
 
     pub fn parse_global(&mut self) -> GenericResult<GlobalOptions> {
-        const DEFAULT_CONFIG_PATH: &str = "/etc/tunnel.yaml";
+        const DEFAULT_CONFIG_PATH: &str = "/etc/hiddenlink.yaml";
 
-        let matches = Command::new("vsb")
-            .about("Tunnel")
+        let matches = Command::new("hiddenlink")
             .version(env!("CARGO_PKG_VERSION"))
 
             .dont_collapse_args_in_usage(true)
