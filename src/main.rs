@@ -9,7 +9,7 @@ mod util;
 use std::io::{self, Write};
 use std::process;
 
-use log::{Level, error};
+use log::error;
 
 use crate::cli::{GlobalOptions, Parser};
 use crate::config::Config;
