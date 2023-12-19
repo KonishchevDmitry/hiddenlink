@@ -24,4 +24,4 @@ case "$name" in
         ;;
 esac
 
-cargo run -- --config "devel/$name.yaml" "${args[@]}"
+cargo run -- -vv --config "devel/$name.yaml" "${args[@]}"

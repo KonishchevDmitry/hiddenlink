@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 use clap::{Command, Arg, ArgAction, ArgMatches, value_parser};
 use const_format::formatcp;
-use log::Level;
 
 use crate::core::GenericResult;
 
