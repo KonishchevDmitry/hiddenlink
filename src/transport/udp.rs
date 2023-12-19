@@ -16,15 +16,14 @@ use crate::util;
 #[derive(Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct UdpTransportConfig {
-    #[validate(length(min = 1))]
-    bind_address: String,
-    #[validate(length(min = 1))]
-    peer_address: String,
+    bind_address: SocketAddr,
+    peer_address: SocketAddr,
 }
 
 pub struct UdpTransport {
-    peer_address: SocketAddr,
+    name: String,
     socket: UdpSocket,
+    peer_address: SocketAddr,
 }
 
 impl UdpTransport {
@@ -32,15 +31,13 @@ impl UdpTransport {
         let socket = UdpSocket::bind(&config.bind_address).await.map_err(|e| format!(
             "Failed to bind to {}: {}", config.bind_address, e))?;
 
-        let peer_address = config.peer_address.parse().map_err(|_| format!(
-            "Invalid peer address: {}", config.peer_address))?;
-
         let transport = Arc::new(UdpTransport {
-            peer_address,
+            name: format!("UDP transport to {}", config.peer_address),
+            peer_address: config.peer_address,
             socket,
         });
 
-        info!("[{}] Listening on {}.", transport.name(), config.bind_address);
+        info!("[{}] Listening on {}.", transport.name, config.bind_address);
 
         {
             let transport = transport.clone();
@@ -53,29 +50,28 @@ impl UdpTransport {
     }
 
     async fn handle(&self, tun: Arc<Tun>) {
-        let name = self.name();
         let mut buf = BytesMut::zeroed(1500 - 20 - 8); // MTU - IPv4 - UDP
 
         loop {
             let size = match self.socket.recv_from(&mut buf).await {
                 Ok((size, _)) => {
                     if size == 0 {
-                        error!("[{}] Got an empty message from the peer.", name);
+                        error!("[{}] Got an empty message from the peer.", self.name);
                         continue;
                     }
                     size
                 },
                 Err(err) => {
-                    error!("[{}] Failed to receive a message from the peer: {}.", name, err);
+                    error!("[{}] Failed to receive a message from the peer: {}.", self.name, err);
                     break;
                 }
             };
 
             let packet = &buf[..size];
-            util::trace_packet(&name, packet);
+            util::trace_packet(&self.name, packet);
 
             if let Err(err) = tun.send(packet).await {
-                error!("[{}] Failed to send the packet to tun device: {}.", name, err);
+                error!("[{}] Failed to send the packet to tun device: {}.", self.name, err);
             }
         }
     }
@@ -83,8 +79,8 @@ impl UdpTransport {
 
 #[async_trait]
 impl Transport for UdpTransport {
-    fn name(&self) -> String {
-        format!("UDP transport to {}", self.peer_address)
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn is_ready(&self) -> bool {
