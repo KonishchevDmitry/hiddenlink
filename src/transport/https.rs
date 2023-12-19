@@ -88,18 +88,35 @@ impl HttpsServerTransport {
 
     // FIXME(konishchev): Rewrite
     async fn handle_connection(peer_addr: SocketAddr, tcp_connection: TcpStream, acceptor: TlsAcceptor) -> EmptyResult {
-        let mut stream = acceptor.accept(tcp_connection).await?;
+        let tls_connection = acceptor.accept(tcp_connection).await?;
+        let upstream_connection = TcpStream::connect("localhost:8080").await?;
 
-        let mut output = sink();
-        stream.write_all(
-            &b"HTTP/1.0 200 ok\r\n\
-            Connection: close\r\n\
-            Content-length: 12\r\n\
-            \r\n\
-            Hello world!"[..]).await?;
-        stream.shutdown().await?;
-        copy(&mut stream, &mut output).await?;
-        println!("Hello: {}", peer_addr);
+        let (mut tls_reader, mut tls_writer) = tokio::io::split(tls_connection);
+        let (mut upstream_reader, mut upstream_writer) = tokio::io::split(upstream_connection);
+
+        tokio::spawn(async move {
+            if let Err(err) = copy(&mut tls_reader, &mut upstream_writer).await {
+                error!(">>> {}", err);
+            }
+        });
+
+        tokio::spawn(async move {
+            if let Err(err) = copy(&mut upstream_reader, &mut tls_writer).await {
+                error!(">>> {}", err);
+            }
+        });
+
+
+        // let mut output = sink();
+        // tls_connection.write_all(
+        //     &b"HTTP/1.0 200 ok\r\n\
+        //     Connection: close\r\n\
+        //     Content-length: 12\r\n\
+        //     \r\n\
+        //     Hello world!"[..]).await?;
+        // stream.shutdown().await?;
+        // copy(&mut stream, &mut output).await?;
+        // println!("Hello: {}", peer_addr);
 
         Ok(())
     }
@@ -149,7 +166,7 @@ fn load_cert(path: &Path) -> GenericResult<Vec<CertificateDer<'static>>> {
     let mut file = BufReader::new(File::open(path)?);
 
     let certs = rustls_pemfile::certs(&mut file).collect::<Result<Vec<_>, _>>()?;
-    if certs.len() < 1 {
+    if certs.is_empty() {
         return Err!("the file doesn't contain any certificate");
     }
 
@@ -166,5 +183,5 @@ fn load_key(path: &Path) -> GenericResult<PrivateKeyDer<'static>> {
         }
     }
 
-    Ok(key.ok_or_else(|| "the file doesn't contain any private key")?.into())
+    Ok(key.ok_or("the file doesn't contain any private key")?.into())
 }
