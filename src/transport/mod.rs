@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use crate::core::EmptyResult;
 
-pub mod https;
+pub mod http;
 pub mod udp;
 
 #[async_trait]

@@ -24,3 +24,6 @@ tokio = { version = "1", features = ["io-util", "macros", "rt", "rt-multi-thread
 tokio-rustls = "0.25.0"
 tokio-tun = "0.11.2"
 validator = { version = "0.16.1", features = ["derive"] }
+
+[dev-dependencies]
+rstest = "0.18.2"

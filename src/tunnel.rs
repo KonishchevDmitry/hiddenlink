@@ -7,7 +7,7 @@ use tokio_tun::Tun;
 use crate::config::{Config, TransportConfig};
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
-use crate::transport::https::HttpsServerTransport;
+use crate::transport::http::HttpServerTransport;
 use crate::transport::udp::UdpTransport;
 use crate::util;
 
@@ -33,8 +33,8 @@ impl Tunnel {
 
         for transport_config in &config.transports {
             let transport = match transport_config {
-                TransportConfig::HttpsServer(config) => HttpsServerTransport::new(config).await.map_err(|e| format!(
-                    "Failed to initialize HTTPS server transport: {}", e))?,
+                TransportConfig::HttpServer(config) => HttpServerTransport::new(config).await.map_err(|e| format!(
+                    "Failed to initialize HTTP server transport: {}", e))?,
 
                 TransportConfig::Udp(config) => UdpTransport::new(config, tun.clone()).await.map_err(|e| format!(
                     "Failed to initialize UDP transport: {}", e))?,
