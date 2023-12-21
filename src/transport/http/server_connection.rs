@@ -1,9 +1,10 @@
 use std::sync::Arc;
 use std::net::SocketAddr;
 
-use log::error;
+use log::{trace, error};
+use rustls::internal::msgs::handshake;
 use rustls::server::Acceptor;
-use tokio::io::copy;
+use tokio::io::{copy, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::LazyConfigAcceptor;
 
@@ -23,33 +24,38 @@ impl ServerConnection {
 
     // FIXME(konishchev): Rewrite
     pub async fn handle(&self, tcp_connection: TcpStream) -> EmptyResult {
-        // let tls_acceptor = LazyConfigAcceptor::new(Acceptor::default(), tcp_connection);
-        // // tls_acceptor.await?;
-        // tokio::pin!(acceptor);
+        let tls_acceptor = LazyConfigAcceptor::new(Acceptor::default(), tcp_connection);
+        tokio::pin!(tls_acceptor);
 
-        // match acceptor.as_mut().await {
-        //     Ok(start) => {
-        //         let clientHello = start.client_hello();
-        //         let config = choose_server_config(clientHello);
-        //         let stream = start.into_stream(config).await.unwrap();
-        //         // Proceed with handling the ServerConnection...
-        //     }
-        //     Err(err) => {
-        //         if let Some(mut stream) = acceptor.take_io() {
-        //             stream
-        //                 .write_all(
-        //                     format!("HTTP/1.1 400 Invalid Input\r\n\r\n\r\n{:?}\n", err)
-        //                         .as_bytes()
-        //                 )
-        //                 .await
-        //                 .unwrap();
-        //         }
-        //     }
-        // }
+        let tls_handshake = match tls_acceptor.as_mut().await {
+            Ok(handshake) => handshake,
+            Err(err) => {
+                if let Some(mut stream) = tls_acceptor.take_io() {
+                    stream
+                        .write_all(
+                            format!("HTTP/1.1 400 Invalid Input\r\n\r\n\r\n{:?}\n", err)
+                                .as_bytes()
+                        )
+                        .await
+                        .unwrap();
+                }
+                return Ok(());
+            }
+        };
+
+        let client_hello = tls_handshake.client_hello();
+        // FIXME(konishchev): ALPN support
+        let requested_server_name = client_hello.server_name();
+
+        let (sni_name, config) = self.domains.select(requested_server_name).get_config(requested_server_name).await;
+        trace!(">>> {:?} -> {}", requested_server_name, sni_name);
 
 
-        let tls_acceptor = self.domains.get_acceptor("localhost").await;
-        let tls_connection = tls_acceptor.accept(tcp_connection).await?;
+        let tls_connection = tls_handshake.into_stream(config).await?;
+
+
+        // let tls_acceptor = self.domains.select("localhost").await;
+        // let tls_connection = tls_acceptor.accept(tcp_connection).await?;
         let upstream_connection = TcpStream::connect("localhost:80").await?;
 
         // let proxy_connection = ProxyConnection::new(config, addr, domain)?;
