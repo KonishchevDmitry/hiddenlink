@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 
 use async_trait::async_trait;
 use log::{trace, info, error};
+use rustls::ClientConfig;
 use serde_derive::{Serialize, Deserialize};
 use tokio::net::TcpListener;
 use validator::Validate;
@@ -12,7 +13,7 @@ use validator::Validate;
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
 use crate::transport::http::server_connection::ServerConnection;
-use crate::transport::http::tls_domain::{TlsDomains, TlsDomainConfig};
+use crate::transport::http::tls::{self, TlsDomains, TlsDomainConfig};
 
 #[derive(Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
@@ -26,19 +27,28 @@ pub struct HttpServerTransportConfig {
 pub struct HttpServerTransport {
     name: String,
     domains: Arc<TlsDomains>,
+    client_config: Arc<ClientConfig>,
 }
 
 impl HttpServerTransport {
     pub async fn new(config: &HttpServerTransportConfig) -> GenericResult<Arc<dyn Transport>> {
         let name = format!("HTTP server on {}", config.bind_address);
-        let tls_domains = Arc::new(TlsDomains::new(&name, &config.default_domain, &config.additional_domains)?);
+        let domains = Arc::new(TlsDomains::new(&name, &config.default_domain, &config.additional_domains)?);
+
+        let roots = tls::load_roots().map_err(|e| format!(
+            "Failed to load root certificates: {}", e))?;
+
+        let client_config = Arc::new(ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth());
 
         let listener = TcpListener::bind(config.bind_address).await.map_err(|e| format!(
             "Failed to bind to {}: {}", config.bind_address, e))?;
 
         let transport = Arc::new(HttpServerTransport{
             name,
-            domains: tls_domains,
+            domains,
+            client_config,
         });
 
         info!("[{}] Listening on {}.", transport.name, config.bind_address);

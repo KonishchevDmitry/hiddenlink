@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use log::error;
+use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde_derive::{Serialize, Deserialize};
 use tokio_rustls::TlsAcceptor;
@@ -93,6 +94,16 @@ fn match_domains(template: &str, domain: &str) -> bool {
     }
 
     return false
+}
+
+pub fn load_roots() -> GenericResult<RootCertStore> {
+    let mut roots = RootCertStore::empty();
+
+    for cert in rustls_native_certs::load_native_certs()? {
+        roots.add(cert)?;
+    }
+
+    Ok(roots)
 }
 
 fn load_certs(cert_path: &Path, key_path: &Path) -> GenericResult<TlsAcceptor> {
