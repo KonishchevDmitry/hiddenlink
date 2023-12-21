@@ -47,7 +47,7 @@ impl ServerConnection {
         // FIXME(konishchev): ALPN support
         let requested_server_name = client_hello.server_name();
 
-        let (sni_name, config) = self.domains.select(requested_server_name).get_config(requested_server_name).await;
+        let (sni_name, config) = self.domains.select(requested_server_name).get_config(requested_server_name);
         trace!(">>> {:?} -> {}", requested_server_name, sni_name);
 
 

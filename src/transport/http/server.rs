@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use std::net::SocketAddr;
@@ -21,7 +20,7 @@ pub struct HttpServerTransportConfig {
     bind_address: SocketAddr,
     default_domain: TlsDomainConfig,
     #[serde(default)]
-    additional_domains: HashMap<String, TlsDomainConfig>,
+    additional_domains: Vec<TlsDomainConfig>,
 }
 
 pub struct HttpServerTransport {
@@ -33,7 +32,7 @@ pub struct HttpServerTransport {
 impl HttpServerTransport {
     pub async fn new(config: &HttpServerTransportConfig) -> GenericResult<Arc<dyn Transport>> {
         let name = format!("HTTP server on {}", config.bind_address);
-        let domains = Arc::new(TlsDomains::new(&name, &config.default_domain, &config.additional_domains)?);
+        let domains = Arc::new(TlsDomains::new(&config.default_domain, &config.additional_domains)?);
 
         let roots = tls::load_roots().map_err(|e| format!(
             "Failed to load root certificates: {}", e))?;
