@@ -1,51 +1,87 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use bytes::Bytes;
+use log::trace;
 use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
-use tokio_rustls::client::TlsStream;
+use tokio_rustls::client::TlsStream as ClientTlsStream;
+use tokio_rustls::server::TlsStream as ServerTlsStream;
 
-use crate::core::{GenericResult, EmptyResult};
+use crate::core::GenericResult;
 
-pub struct ProxyConnection {
-    addr: SocketAddr,
-    tls_connection: TlsStream<TcpStream>,
+// Represents a proxied connection to real web server
+pub struct ProxiedConnection<'a> {
+    name: &'a str,
+    preread_data: Bytes,
+    client_connection: ServerTlsStream<TcpStream>,
+    upstream_connection: ClientTlsStream<TcpStream>,
+    use_only_preread_data: bool,
 }
 
-impl ProxyConnection {
-    pub async fn new(config: Arc<ClientConfig>, addr: SocketAddr, domain: &str) -> GenericResult<ProxyConnection> {
-        let domain = DnsName::try_from(domain).map_err(|_| format!(
-            "Invalid DNS name: {:?}", domain))?.to_owned();
+impl<'a> ProxiedConnection<'a> {
+    pub async fn new(
+        name: &'a str, preread_data: Bytes, client_connection: ServerTlsStream<TcpStream>, use_only_preread_data: bool,
+        upstream_client_config: Arc<ClientConfig>, upstream_addr: SocketAddr, upstream_domain: &str,
+    ) -> GenericResult<ProxiedConnection<'a>> {
+        let domain = DnsName::try_from(upstream_domain).map_err(|_| format!(
+            "Invalid DNS name: {:?}", upstream_domain))?.to_owned();
 
-        let tcp_connection = TcpStream::connect(addr).await.map_err(|e| format!(
-            "Unable to connect to {}: {}", addr, e))?;
+        let upstream_tcp_connection = TcpStream::connect(upstream_addr).await.map_err(|e| format!(
+            "Unable to connect: {}", e))?;
 
-        let tls_connector = TlsConnector::from(config);
-        let tls_connection = tls_connector.connect(ServerName::DnsName(domain), tcp_connection).await.map_err(|e| format!(
+        let domain = ServerName::DnsName(domain);
+        let upstream_tls_connector = TlsConnector::from(upstream_client_config);
+
+        let upstream_tls_connection = upstream_tls_connector.connect(domain, upstream_tcp_connection).await.map_err(|e| format!(
             "TLS handshake failed: {}", e))?;
 
-        Ok(ProxyConnection {addr, tls_connection})
+        Ok(ProxiedConnection {
+            name,
+            preread_data,
+            client_connection,
+            upstream_connection: upstream_tls_connection,
+            use_only_preread_data,
+        })
     }
 
-    // XXX(konishchev): HERE
-    // pub async fn handle(&self) -> EmptyResult {
+    pub async fn handle(self) {
+        let (client_reader, client_writer) = tokio::io::split(self.client_connection);
+        let (upstream_reader, upstream_writer) = tokio::io::split(self.upstream_connection);
 
-    //     stream.write_all(content.as_bytes()).await?;
+        let preread_data = self.preread_data;
+        let client_reader = (!self.use_only_preread_data).then_some(client_reader);
 
-    //     let (mut reader, mut writer) = split(stream);
+        match tokio::try_join!(
+            proxy_connection(Some(preread_data), client_reader, upstream_writer),
+            proxy_connection(None, Some(upstream_reader), client_writer),
+        ) {
+            Ok(_) => {
+                trace!("[{}] The connection has been successfully proxied.", self.name);
+            },
+            Err(err) => {
+                trace!("[{}] Connection proxying has been interrupted: {}.", self.name, err);
+            },
+        }
+    }
+}
 
-    //     tokio::select! {
-    //         ret = copy(&mut reader, &mut stdout) => {
-    //             ret?;
-    //         },
-    //         ret = copy(&mut stdin, &mut writer) => {
-    //             ret?;
-    //             writer.shutdown().await?
-    //         }
-    //     }
+async fn proxy_connection<R, W>(preread_data: Option<Bytes>, reader: Option<R>, writer: W) -> std::io::Result<()>
+    where R: AsyncRead, W: AsyncWrite
+{
+    tokio::pin!(writer);
 
-    //     Ok(())
-    // }
+    if let Some(mut preread_data) = preread_data {
+        writer.write_all_buf(&mut preread_data).await?;
+    }
+
+    if let Some(reader) = reader {
+        tokio::pin!(reader);
+        tokio::io::copy(&mut reader, &mut writer).await?;
+    }
+
+    writer.shutdown().await
 }

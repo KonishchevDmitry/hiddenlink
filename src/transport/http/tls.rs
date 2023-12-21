@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use itertools::Itertools;
-use log::{debug, error};
+use log::debug;
 use rustls::{RootCertStore, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde_derive::{Serialize, Deserialize};
