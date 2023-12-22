@@ -9,24 +9,23 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
-use tokio_rustls::server::TlsStream as ServerTlsStream;
 
 use crate::core::GenericResult;
 
 // Represents a proxied connection to real web server
-pub struct ProxiedConnection<'a> {
+pub struct ProxiedConnection<'a, C: AsyncRead + AsyncWrite> {
     name: &'a str,
     preread_data: Bytes,
-    client_connection: ServerTlsStream<TcpStream>,
+    client_connection: C,
     upstream_connection: ClientTlsStream<TcpStream>,
-    use_only_preread_data: bool,
+    use_preread_data_only: bool,
 }
 
-impl<'a> ProxiedConnection<'a> {
+impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
     pub async fn new(
-        name: &'a str, preread_data: Bytes, client_connection: ServerTlsStream<TcpStream>, use_only_preread_data: bool,
+        name: &'a str, preread_data: Bytes, client_connection: C, use_preread_data_only: bool,
         upstream_client_config: Arc<ClientConfig>, upstream_addr: SocketAddr, upstream_domain: &str,
-    ) -> GenericResult<ProxiedConnection<'a>> {
+    ) -> GenericResult<ProxiedConnection<'a, C>> {
         let domain = DnsName::try_from(upstream_domain).map_err(|_| format!(
             "Invalid DNS name: {:?}", upstream_domain))?.to_owned();
 
@@ -44,7 +43,7 @@ impl<'a> ProxiedConnection<'a> {
             preread_data,
             client_connection,
             upstream_connection: upstream_tls_connection,
-            use_only_preread_data,
+            use_preread_data_only,
         })
     }
 
@@ -53,7 +52,7 @@ impl<'a> ProxiedConnection<'a> {
         let (upstream_reader, upstream_writer) = tokio::io::split(self.upstream_connection);
 
         let preread_data = self.preread_data;
-        let client_reader = (!self.use_only_preread_data).then_some(client_reader);
+        let client_reader = (!self.use_preread_data_only).then_some(client_reader);
 
         match tokio::try_join!(
             proxy_connection(Some(preread_data), client_reader, upstream_writer),

@@ -22,7 +22,7 @@ pub struct TlsDomainConfig {
 }
 
 pub struct TlsDomains {
-    default_domain: TlsDomain,
+    pub default_domain: TlsDomain,
     additional_domains: Vec<TlsDomain>,
 }
 
@@ -70,13 +70,17 @@ impl TlsDomain {
         Ok(TlsDomain {domains, config})
     }
 
+    pub fn primary_domain(&self) -> &str {
+        self.domains.first().unwrap()
+    }
+
     pub fn get_config(&self, requested_domain: Option<&str>) -> (&str, Arc<ServerConfig>) {
         if let Some(requested) = requested_domain {
             if let Some(domain) = self.domains.iter().find(|&domain| domain == requested) {
                 return (domain, self.config.clone());
             }
         }
-        (self.domains.first().unwrap(), self.config.clone())
+        (self.primary_domain(), self.config.clone())
     }
 }
 
