@@ -116,7 +116,7 @@ impl ServerConnection {
                 } else {
                     ConnectionType::Proxied(buf.freeze())
                 });
-            } else if size == 0 || buf != &secret[..buf.len()] {
+            } else if size == 0 || buf != secret[..buf.len()] {
                 return Ok(ConnectionType::Proxied(buf.freeze()));
             }
         }

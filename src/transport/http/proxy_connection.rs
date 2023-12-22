@@ -10,7 +10,7 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
 
-use crate::core::GenericResult;
+use crate::core::{GenericResult, EmptyResult};
 
 // Represents a proxied connection to real web server
 pub struct ProxiedConnection<'a, C: AsyncRead + AsyncWrite> {
@@ -55,26 +55,33 @@ impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
         let client_reader = (!self.use_preread_data_only).then_some(client_reader);
 
         match tokio::try_join!(
-            proxy_connection(Some(preread_data), client_reader, upstream_writer),
-            proxy_connection(None, Some(upstream_reader), client_writer),
+            async {
+                proxy_connection(Some(preread_data), client_reader, upstream_writer).await.map_err(|e| format!(
+                    "client -> upstream proxying has been interrupted: {}", e))
+            },
+            async {
+                proxy_connection(None, Some(upstream_reader), client_writer).await.map_err(|e| format!(
+                    "upstream -> client proxying has been interrupted: {}", e))
+            },
         ) {
             Ok(_) => {
                 trace!("[{}] The connection has been successfully proxied.", self.name);
             },
             Err(err) => {
-                trace!("[{}] Connection proxying has been interrupted: {}.", self.name, err);
+                trace!("[{}] {}.", self.name, err);
             },
         }
     }
 }
 
-async fn proxy_connection<R, W>(preread_data: Option<Bytes>, reader: Option<R>, writer: W) -> std::io::Result<()>
+async fn proxy_connection<R, W>(preread_data: Option<Bytes>, reader: Option<R>, writer: W) -> EmptyResult
     where R: AsyncRead, W: AsyncWrite
 {
     tokio::pin!(writer);
 
     if let Some(mut preread_data) = preread_data {
-        writer.write_all_buf(&mut preread_data).await?;
+        writer.write_all_buf(&mut preread_data).await.map_err(|e| format!(
+            "Unable to send preread data: {}", e))?;
     }
 
     if let Some(reader) = reader {
@@ -82,5 +89,8 @@ async fn proxy_connection<R, W>(preread_data: Option<Bytes>, reader: Option<R>, 
         tokio::io::copy(&mut reader, &mut writer).await?;
     }
 
-    writer.shutdown().await
+    writer.shutdown().await.map_err(|e| format!(
+        "Unable to shutdown connection: {}", e))?;
+
+    Ok(())
 }

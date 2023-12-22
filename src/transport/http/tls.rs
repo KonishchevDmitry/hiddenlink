@@ -96,7 +96,7 @@ fn match_domains(base: &str, domain: &str) -> bool {
         }
     }
 
-    return false
+    false
 }
 
 pub fn load_roots() -> GenericResult<RootCertStore> {

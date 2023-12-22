@@ -18,26 +18,35 @@ use crate::transport::http::tls::{self, TlsDomains, TlsDomainConfig};
 #[serde(deny_unknown_fields)]
 pub struct HttpServerTransportConfig {
     bind_address: SocketAddr,
+    upstream_address: SocketAddr,
     default_domain: TlsDomainConfig,
     #[serde(default)]
     additional_domains: Vec<TlsDomainConfig>,
+    #[validate(non_control_character)]
+    #[validate(length(min = 1))]
+    secret: String,
 }
 
 pub struct HttpServerTransport {
     name: String,
+
+    secret: Arc<String>,
     domains: Arc<TlsDomains>,
-    client_config: Arc<ClientConfig>,
+
+    upstream_address: SocketAddr,
+    upstream_client_config: Arc<ClientConfig>,
 }
 
 impl HttpServerTransport {
     pub async fn new(config: &HttpServerTransportConfig) -> GenericResult<Arc<dyn Transport>> {
         let name = format!("HTTP server on {}", config.bind_address);
+        let secret = Arc::new(config.secret.clone());
         let domains = Arc::new(TlsDomains::new(&config.default_domain, &config.additional_domains)?);
 
         let roots = tls::load_roots().map_err(|e| format!(
             "Failed to load root certificates: {}", e))?;
 
-        let client_config = Arc::new(ClientConfig::builder()
+        let upstream_client_config = Arc::new(ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth());
 
@@ -46,8 +55,12 @@ impl HttpServerTransport {
 
         let transport = Arc::new(HttpServerTransport{
             name,
+
+            secret,
             domains,
-            client_config,
+
+            upstream_address: config.upstream_address,
+            upstream_client_config,
         });
 
         info!("[{}] Listening on {}.", transport.name, config.bind_address);
@@ -79,14 +92,13 @@ impl HttpServerTransport {
                 },
             };
 
-            // FIXME(konishchev): Rewrite all below
             trace!("[{}] Connection accepted from {}.", self.name, peer_addr);
-            let server_connection = ServerConnection::new(peer_addr, self.domains.clone());
+            let server_connection = ServerConnection::new(
+                peer_addr, self.secret.clone(), self.domains.clone(),
+                self.upstream_address, self.upstream_client_config.clone());
 
             tokio::spawn(async move {
-                if let Err(err) = server_connection.handle(connection).await {
-                    error!("[{}] {}.", peer_addr, err);
-                }
+                server_connection.handle(connection).await
             });
         }
     }

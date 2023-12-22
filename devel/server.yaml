@@ -6,6 +6,8 @@ transports:
 
   - type: http-server
     bind_address: 172.31.255.1:4000
+    upstream_address: 172.31.255.1:443
     default_domain:
       cert: /etc/certs/server.lan.crt
       key: /etc/certs/server.lan.key
+    secret: GET /secret
