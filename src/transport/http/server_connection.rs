@@ -47,8 +47,8 @@ impl ServerConnection {
         };
 
         match self.process_hiddenlink_handshake(&mut tls_connection).await {
-            Ok(ConnectionType::Hiddenlink) => {
-                self.process_hiddenlink_connection(tls_connection).await;
+            Ok(ConnectionType::Hiddenlink(preread_data)) => {
+                self.process_hiddenlink_connection(preread_data, tls_connection).await;
             },
             Ok(ConnectionType::Proxied(preread_data)) => {
                 self.process_request_proxying(preread_data, tls_connection, upstream_domain).await;
@@ -103,25 +103,26 @@ impl ServerConnection {
     }
 
     async fn process_hiddenlink_handshake(&self, connection: &mut TlsStream<TcpStream>) -> GenericResult<ConnectionType> {
-        let mut buf = BytesMut::with_capacity(self.secret.len());
+        let secret = self.secret.as_bytes();
+        let mut buf = BytesMut::with_capacity(secret.len());
 
         loop {
             let size = connection.read_buf(&mut buf).await.map_err(|e| format!(
                 "Connection is broken: {}", e))?;
 
-            if buf.len() >= self.secret.len() {
-                return Ok(if &buf == self.secret.as_bytes() {
-                    ConnectionType::Hiddenlink
+            if buf.len() >= secret.len() {
+                return Ok(if &buf[..secret.len()] == secret {
+                    ConnectionType::Hiddenlink(buf.freeze().split_off(secret.len()))
                 } else {
                     ConnectionType::Proxied(buf.freeze())
                 });
-            } else if size == 0 || buf.contains(&b'\r') {
+            } else if size == 0 || buf != &secret[..buf.len()] {
                 return Ok(ConnectionType::Proxied(buf.freeze()));
             }
         }
     }
 
-    async fn process_hiddenlink_connection(&self, _connection: TlsStream<TcpStream>) {
+    async fn process_hiddenlink_connection(&self, _preread_data: Bytes, _connection: TlsStream<TcpStream>) {
         trace!("[{}] The client has passed hiddenlink handshake.", self.name);
         // FIXME(konishchev): Implement
     }
@@ -150,6 +151,6 @@ impl ServerConnection {
 }
 
 enum ConnectionType {
-    Hiddenlink,
+    Hiddenlink(Bytes),
     Proxied(Bytes),
 }
