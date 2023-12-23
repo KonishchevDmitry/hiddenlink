@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+#
+# Deploys service in devel mode
+#
+
+set -eu
+cd "$(dirname "$(realpath "$0")")/.."
+
+cargo build --release
+
+sudo rm /usr/local/sbin/hiddenlink
+sudo cp target/release/hiddenlink /usr/local/sbin/hiddenlink
+
+sudo systemctl restart hiddenlink
+sudo systemctl status hiddenlink
