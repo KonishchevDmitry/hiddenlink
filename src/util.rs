@@ -32,8 +32,12 @@ pub fn trace_packet(source: &str, data: &[u8]) {
             }
         },
         _ => {
-            error!("[{}] Got an invalid packet ({} bytes): {:02x}.",
-                source, data.len(), data.iter().format(" "));
+            error!("[{}] Got an invalid packet ({} bytes): {}.",
+                source, data.len(), format_packet(data));
         },
     }
+}
+
+pub fn format_packet(data: &[u8]) -> String {
+    format!("{:02x}", data.iter().format(" "))
 }

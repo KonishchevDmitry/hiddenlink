@@ -2,6 +2,7 @@
 
 mod cli;
 mod config;
+mod constants;
 mod transport;
 mod tunnel;
 mod util;

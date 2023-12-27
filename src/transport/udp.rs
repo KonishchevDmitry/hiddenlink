@@ -9,6 +9,7 @@ use tokio::net::UdpSocket;
 use tokio_tun::Tun;
 use validator::Validate;
 
+use crate::constants;
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
 use crate::util;
@@ -50,7 +51,7 @@ impl UdpTransport {
     }
 
     async fn handle(&self, tun: Arc<Tun>) {
-        let mut buf = BytesMut::zeroed(1500 - 20 - 8); // MTU - IPv4 - UDP
+        let mut buf = BytesMut::zeroed(constants::MTU - constants::IPV4_HEADER_SIZE - constants::UDP_HEADER_SIZE);
 
         loop {
             let size = match self.socket.recv_from(&mut buf).await {
