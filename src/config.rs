@@ -6,7 +6,7 @@ use validator::{Validate, ValidationErrors};
 
 use crate::core::GenericResult;
 
-pub use crate::transport::http::HttpServerTransportConfig;
+pub use crate::transport::http::{HttpClientTransportConfig, HttpServerTransportConfig};
 pub use crate::transport::udp::UdpTransportConfig;
 
 #[derive(Deserialize, Validate)]
@@ -35,6 +35,7 @@ impl Config {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all="kebab-case")]
 pub enum TransportConfig {
+    HttpClient(HttpClientTransportConfig),
     HttpServer(HttpServerTransportConfig),
     Udp(UdpTransportConfig),
 }
@@ -42,6 +43,7 @@ pub enum TransportConfig {
 impl Validate for TransportConfig {
     fn validate(&self) -> Result<(), ValidationErrors> {
         match self {
+            TransportConfig::HttpClient(t) => t.validate(),
             TransportConfig::HttpServer(t) => t.validate(),
             TransportConfig::Udp(t) => t.validate(),
         }

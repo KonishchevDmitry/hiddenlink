@@ -3,3 +3,7 @@ transports:
   - type: udp
     bind_address: 127.0.0.1:3000
     peer_address: 127.0.0.1:2000
+
+  - type: http-client
+    endpoint: server.lan:4000
+    secret: GET /secret

@@ -537,10 +537,12 @@ name = "hiddenlink"
 version = "0.1.5"
 dependencies = [
  "async-trait",
+ "bitflags 2.4.1",
  "bytes",
  "clap",
  "const_format",
  "easy-logging",
+ "host-port-pair",
  "itertools",
  "log",
  "pktparse",
@@ -556,6 +558,15 @@ dependencies = [
  "tokio-tun",
  "validator",
  "x509-parser",
+]
+
+[[package]]
+name = "host-port-pair"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "428285de194b64a0f2d71c00ed714818afbf13da0756f0c66aa094f06bf1c90c"
+dependencies = [
+ "thiserror",
 ]
 
 [[package]]
