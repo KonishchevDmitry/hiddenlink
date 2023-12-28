@@ -32,17 +32,17 @@ impl Tunnel {
         let mut transports = Vec::new();
 
         for transport_config in &config.transports {
-            let transport = match transport_config {
+            let tun = tun.clone();
+            transports.push(match transport_config {
                 TransportConfig::HttpClient(config) => HttpClientTransport::new(config).await.map_err(|e| format!(
                     "Failed to initialize HTTP client transport: {e}"))?,
 
-                TransportConfig::HttpServer(config) => HttpServerTransport::new(config).await.map_err(|e| format!(
+                TransportConfig::HttpServer(config) => HttpServerTransport::new(config, tun).await.map_err(|e| format!(
                     "Failed to initialize HTTP server transport: {e}"))?,
 
-                TransportConfig::Udp(config) => UdpTransport::new(config, tun.clone()).await.map_err(|e| format!(
+                TransportConfig::Udp(config) => UdpTransport::new(config, tun).await.map_err(|e| format!(
                     "Failed to initialize UDP transport: {e}"))?,
-            };
-            transports.push(transport);
+            });
         }
 
         Ok(Tunnel {tun, transports})

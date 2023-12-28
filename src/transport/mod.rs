@@ -9,5 +9,5 @@ pub mod udp;
 pub trait Transport {
     fn name(&self) -> &str;
     fn is_ready(&self) -> bool;
-    async fn send(&self, buf: &[u8]) -> EmptyResult;
+    async fn send(&self, packet: &[u8]) -> EmptyResult;
 }

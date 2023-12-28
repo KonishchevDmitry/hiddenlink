@@ -1,7 +1,7 @@
 use std::marker::Unpin;
 
 use bitflags::bitflags;
-use bytes::{BytesMut, Buf};
+use bytes::{Bytes, BytesMut, Buf};
 use tokio::io::AsyncReadExt;
 
 use crate::{constants, util};
@@ -15,20 +15,25 @@ bitflags! {
     }
 }
 
-pub struct PacketReader {
+pub struct PacketReader<C: AsyncReadExt + Unpin> {
     buf: BytesMut,
+    connection: C,
     state: PacketReaderState,
 }
 
-impl PacketReader {
-    pub fn new() -> PacketReader {
+impl<C: AsyncReadExt + Unpin> PacketReader<C> {
+    pub fn new(preread_data: Bytes, connection: C) -> PacketReader<C> {
+        let mut buf = BytesMut::new(); // FIXME(konishchev): Set initial capacity
+        buf.extend(&preread_data);
+
         PacketReader {
-            buf: BytesMut::new(), // FIXME(konishchev): Set initial capacity
+            buf,
+            connection,
             state: PacketReaderState::ReadSize{to_drop: 0},
         }
     }
 
-    pub async fn read<R: AsyncReadExt + Unpin>(&mut self, connection: &mut R) -> GenericResult<Option<&[u8]>> {
+    pub async fn read(&mut self) -> GenericResult<Option<&[u8]>> {
         loop {
             let (is_packet, data_size, max_size) = match self.state {
                 PacketReaderState::ReadSize{to_drop} => {
@@ -42,7 +47,7 @@ impl PacketReader {
             while self.buf.len() < data_size {
                 self.buf.reserve(max_size - self.buf.len());
 
-                let read_size = connection.read_buf(&mut self.buf).await.map_err(|e| format!(
+                let read_size = self.connection.read_buf(&mut self.buf).await.map_err(|e| format!(
                     "Connection is broken: {e}"))?;
 
                 if read_size == 0 {

@@ -72,7 +72,7 @@ impl UdpTransport {
             util::trace_packet(&self.name, packet);
 
             if let Err(err) = tun.send(packet).await {
-                error!("[{}] Failed to send the packet to tun device: {}.", self.name, err);
+                error!("[{}] Failed to send packet to tun device: {}.", self.name, err);
             }
         }
     }

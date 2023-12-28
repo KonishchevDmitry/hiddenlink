@@ -1,5 +1,5 @@
 use std::io::ErrorKind;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
 
 use async_trait::async_trait;
@@ -7,11 +7,12 @@ use log::{trace, info, error};
 use rustls::ClientConfig;
 use serde_derive::{Serialize, Deserialize};
 use tokio::net::TcpListener;
+use tokio_tun::Tun;
 use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
-use crate::transport::http::server_connection::ServerConnection;
+use crate::transport::http::server_connection::{ServerConnection, ServerHiddenlinkConnection};
 use crate::transport::http::tls::{self, TlsDomains, TlsDomainConfig};
 
 #[derive(Serialize, Deserialize, Validate)]
@@ -35,10 +36,12 @@ pub struct HttpServerTransport {
 
     upstream_address: SocketAddr,
     upstream_client_config: Arc<ClientConfig>,
+
+    connections: Arc<Mutex<Vec<Arc<ServerHiddenlinkConnection>>>>,
 }
 
 impl HttpServerTransport {
-    pub async fn new(config: &HttpServerTransportConfig) -> GenericResult<Arc<dyn Transport>> {
+    pub async fn new(config: &HttpServerTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
         let name = format!("HTTP server on {}", config.bind_address);
         let secret = Arc::new(config.secret.clone());
         let domains = Arc::new(TlsDomains::new(&config.default_domain, &config.additional_domains)?);
@@ -61,6 +64,8 @@ impl HttpServerTransport {
 
             upstream_address: config.upstream_address,
             upstream_client_config,
+
+            connections: Arc::new(Mutex::new(Vec::new())),
         });
 
         info!("[{}] Listening on {}.", transport.name, config.bind_address);
@@ -68,14 +73,14 @@ impl HttpServerTransport {
         {
             let transport = transport.clone();
             tokio::spawn(async move {
-                transport.handle(listener).await;
+                transport.handle(listener, tun).await;
             });
         }
 
         Ok(transport)
     }
 
-    async fn handle(&self, listener: TcpListener) {
+    async fn handle(&self, listener: TcpListener, tun: Arc<Tun>) {
         loop {
             // FIXME(konishchev): Add semaphore
             // FIXME(konishchev): Timeouts?
@@ -97,9 +102,23 @@ impl HttpServerTransport {
                 peer_addr, self.secret.clone(), self.domains.clone(),
                 self.upstream_address, self.upstream_client_config.clone());
 
-            tokio::spawn(async move {
-                server_connection.handle(connection).await
-            });
+            {
+                let tun = tun.clone();
+                let connections = self.connections.clone();
+
+                tokio::spawn(async move {
+                    if let Some(connection) = server_connection.handle(connection).await {
+                        let connection = Arc::new(connection);
+                        connections.lock().unwrap().push(connection.clone());
+
+                        connection.handle(tun).await;
+
+                        let mut connections = connections.lock().unwrap();
+                        let index = connections.iter().position(|other| Arc::ptr_eq(&connection, other)).unwrap();
+                        connections.swap_remove(index);
+                    }
+                });
+            }
         }
     }
 }
@@ -112,11 +131,15 @@ impl Transport for HttpServerTransport {
 
     // FIXME(konishchev): Implement
     fn is_ready(&self) -> bool {
-        false
+        true
     }
 
     // FIXME(konishchev): Implement
-    async fn send(&self, _: &[u8]) -> EmptyResult {
-        todo!()
+    async fn send(&self, packet: &[u8]) -> EmptyResult {
+        let Some(connection) = self.connections.lock().unwrap().first().map(Clone::clone) else {
+            return Err!("Not connected");
+        };
+
+        Ok(connection.send(packet).await?)
     }
 }
