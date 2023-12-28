@@ -1,3 +1,5 @@
+mod connection;
+
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -9,7 +11,7 @@ use validator::Validate;
 
 use crate::core::{GenericResult, GenericError, EmptyResult};
 use crate::transport::Transport;
-use crate::transport::http::client_connection::ClientConnection;
+use crate::transport::http::client::connection::Connection;
 use crate::transport::http::common::ConnectionFlags;
 use crate::transport::http::tls;
 
@@ -70,7 +72,7 @@ impl HttpClientTransport {
     async fn handle(&self) {
         // FIXME(konishchev): Timeouts
         // FIXME(konishchev): Rewrite
-        let connection = ClientConnection::new(
+        let connection = Connection::new(
             0, &self.endpoint, &self.domain, self.config.clone(), ConnectionFlags::all(), self.secret.clone()).unwrap();
         connection.handle().await;
     }

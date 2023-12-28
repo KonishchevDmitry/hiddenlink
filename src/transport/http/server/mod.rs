@@ -1,3 +1,7 @@
+mod hiddenlink_connection;
+mod proxied_connection;
+mod server_connection;
+
 use std::io::ErrorKind;
 use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
@@ -12,7 +16,8 @@ use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
-use crate::transport::http::server_connection::{ServerConnection, ServerHiddenlinkConnection};
+use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
+use crate::transport::http::server::server_connection::ServerConnection;
 use crate::transport::http::tls::{self, TlsDomains, TlsDomainConfig};
 
 #[derive(Serialize, Deserialize, Validate)]
@@ -37,7 +42,7 @@ pub struct HttpServerTransport {
     upstream_address: SocketAddr,
     upstream_client_config: Arc<ClientConfig>,
 
-    connections: Arc<Mutex<Vec<Arc<ServerHiddenlinkConnection>>>>,
+    connections: Arc<Mutex<Vec<Arc<HiddenlinkConnection>>>>,
 }
 
 impl HttpServerTransport {

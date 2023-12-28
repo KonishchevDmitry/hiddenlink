@@ -13,7 +13,7 @@ use crate::core::{GenericResult, EmptyResult};
 use crate::transport::http::common::{ConnectionFlags, PacketReader};
 use crate::util;
 
-pub struct ClientConnection {
+pub struct Connection {
     name: String,
     endpoint: String,
     domain: DnsName<'static>,
@@ -22,11 +22,11 @@ pub struct ClientConnection {
     secret: Arc<String>,
 }
 
-impl ClientConnection {
+impl Connection {
     pub fn new(
         id: u64, endpoint: &str, domain: &str, config: Arc<ClientConfig>, flags: ConnectionFlags, secret: Arc<String>,
-    ) -> GenericResult<ClientConnection> {
-        Ok(ClientConnection {
+    ) -> GenericResult<Connection> {
+        Ok(Connection {
             name: format!("HTTP connection #{id} to {endpoint}"),
             endpoint: endpoint.to_owned(),
             domain: DnsName::try_from(domain.to_owned())?,
