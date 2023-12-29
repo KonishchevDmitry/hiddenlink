@@ -1,13 +1,16 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
-use log::{trace, info, warn};
+use log::{trace, info, warn, error};
 use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
+use tokio::time;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
+use tokio_tun::Tun;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::http::common::{ConnectionFlags, PacketReader};
@@ -36,45 +39,25 @@ impl Connection {
         })
     }
 
-    // XXX(konishchev): Rewrite
-    pub async fn handle(&self) {
-        // let mut buf = BytesMut::with_capacity(4096); // FIXME(konishchev): Capacity
-
-        let connection = match self.process_connection().await {
-            Ok(connection) => connection,
-            Err(err) => {
-                warn!("[{}] Failed to establish hiddenlink connection: {err}", self.name);
-                return;
-            },
-        };
-
-        let mut packet_reader = PacketReader::new(Bytes::new(), connection);
-
+    pub async fn handle(&self, tun: Arc<Tun>) {
         loop {
-            let packet = match packet_reader.read().await {
-                Ok(Some(packet)) => {
-                    packet
-                },
-                Ok(None) => {
-                    info!("[{}]: The server has closed the connection.", self.name);
-                    break;
+            match self.process_connect().await {
+                Ok(connection) => {
+                    self.process_connection(connection, tun.clone()).await;
                 },
                 Err(err) => {
-                    warn!("[{}]: {err}", self.name);
-                    return;
-                }
+                    warn!("[{}] Failed to establish hiddenlink connection: {err}", self.name);
+                },
             };
 
-            util::trace_packet(&self.name, packet);
-
-            // let size = connection.read_buf(&mut buf).await.unwrap();
-            // trace!("Got {}/{} bytes.", size, buf.len());
-            // buf.advance(cnt)
-            // buf.reserve(additional)
+            // FIXME(konishchev): Exponential backoff?
+            let timeout = Duration::from_secs(3);
+            info!("[{}] Reconnecting in {timeout:?}...", self.name);
+            time::sleep(timeout).await;
         }
     }
 
-    async fn process_connection(&self) -> GenericResult<ClientTlsStream<TcpStream>> {
+    async fn process_connect(&self) -> GenericResult<ClientTlsStream<TcpStream>> {
         trace!("[{}] Establishing new connection...", self.name);
 
         let tcp_connection = TcpStream::connect(&self.endpoint).await.map_err(|e| format!(
@@ -96,7 +79,37 @@ impl Connection {
         // FIXME(konishchev): Send random payload to mimic HTTP client request
         connection.write_all(self.secret.as_bytes()).await?;
         connection.write_u8(self.flags.bits()).await?;
-        // let (reader, mut writer) = tokio::io::split(connection);
         Ok(())
+    }
+
+    async fn process_connection(&self, connection: ClientTlsStream<TcpStream>, tun: Arc<Tun>) {
+        let mut packet_reader = PacketReader::new(Bytes::new(), connection);
+
+        loop {
+            let packet = match packet_reader.read().await {
+                Ok(Some(packet)) => packet,
+                Ok(None) => {
+                    info!("[{}]: Server has closed the connection.", self.name);
+                    break;
+                },
+                Err(err) => {
+                    warn!("[{}]: {err}.", self.name);
+                    return;
+                }
+            };
+
+            if !self.flags.contains(ConnectionFlags::INGRESS) {
+                error!("[{}] Got a packet from non-ingress connection.", self.name);
+                continue;
+            }
+
+            util::trace_packet(&self.name, packet);
+
+            if let Err(err) = tun.send(packet).await {
+                error!("[{}] Failed to send packet to tun device: {err}.", self.name);
+            }
+        }
+
+        // FIXME(konishchev): Shutdown
     }
 }

@@ -40,7 +40,7 @@ impl HiddenlinkConnection {
             let packet = match packet_reader.read().await {
                 Ok(Some(packet)) => packet,
                 Ok(None) => {
-                    info!("[{}]: The client has closed the connection.", self.name);
+                    info!("[{}]: Client has closed the connection.", self.name);
                     break;
                 },
                 Err(err) => {
@@ -71,7 +71,6 @@ impl Transport for HiddenlinkConnection {
         &self.name
     }
 
-    // XXX(konishchev): HERE
     // FIXME(konishchev): Implement
     // FIXME(konishchev): Check socket buffers?
     fn is_ready(&self) -> bool {
@@ -79,6 +78,7 @@ impl Transport for HiddenlinkConnection {
     }
 
     // FIXME(konishchev): Implement
+    // FIXME(konishchev): https://docs.rs/tokio-util/0.7.10/tokio_util/sync/struct.CancellationToken.html on error?
     async fn send(&self, packet: &[u8]) -> EmptyResult {
         let mut writer = self.writer.lock().await;
         Ok(writer.write_all(packet).await?)

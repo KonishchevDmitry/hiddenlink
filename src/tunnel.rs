@@ -34,7 +34,7 @@ impl Tunnel {
         for transport_config in &config.transports {
             let tun = tun.clone();
             transports.push(match transport_config {
-                TransportConfig::HttpClient(config) => HttpClientTransport::new(config).await.map_err(|e| format!(
+                TransportConfig::HttpClient(config) => HttpClientTransport::new(config, tun).await.map_err(|e| format!(
                     "Failed to initialize HTTP client transport: {e}"))?,
 
                 TransportConfig::HttpServer(config) => HttpServerTransport::new(config, tun).await.map_err(|e| format!(

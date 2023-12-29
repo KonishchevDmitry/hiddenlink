@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use host_port_pair::HostPortPair;
 use rustls::ClientConfig;
 use serde_derive::{Serialize, Deserialize};
+use tokio_tun::Tun;
 use validator::Validate;
 
 use crate::core::{GenericResult, GenericError, EmptyResult};
@@ -33,7 +34,7 @@ pub struct HttpClientTransport {
 }
 
 impl HttpClientTransport {
-    pub async fn new(config: &HttpClientTransportConfig) -> GenericResult<Arc<dyn Transport>> {
+    pub async fn new(config: &HttpClientTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
         let name = format!("HTTP client to {}", config.endpoint);
         let secret = Arc::new(config.secret.clone());
 
@@ -62,19 +63,19 @@ impl HttpClientTransport {
         {
             let transport = transport.clone();
             tokio::spawn(async move {
-                transport.handle().await;
+                transport.handle(tun).await;
             });
         }
 
         Ok(transport)
     }
 
-    async fn handle(&self) {
+    async fn handle(&self, tun: Arc<Tun>) {
         // FIXME(konishchev): Timeouts
         // FIXME(konishchev): Rewrite
         let connection = Connection::new(
             0, &self.endpoint, &self.domain, self.config.clone(), ConnectionFlags::all(), self.secret.clone()).unwrap();
-        connection.handle().await;
+        connection.handle(tun).await;
     }
 }
 
