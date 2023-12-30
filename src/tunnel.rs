@@ -6,14 +6,14 @@ use tokio_tun::Tun;
 
 use crate::config::{Config, TransportConfig};
 use crate::core::{GenericResult, EmptyResult};
-use crate::transport::Transport;
+use crate::transport::{Transport, WeightedTransports};
 use crate::transport::http::{HttpClientTransport, HttpServerTransport};
 use crate::transport::udp::UdpTransport;
 use crate::util;
 
 pub struct Tunnel {
     tun: Arc<Tun>,
-    transports: Vec<Arc<dyn Transport>>,
+    transports: WeightedTransports<dyn Transport>,
 }
 
 impl Tunnel {
@@ -29,11 +29,11 @@ impl Tunnel {
             .map_err(|e| format!("Unable to attach to {:?} tun device: {}", config.name, e))?
             .drain(..).next().unwrap());
 
-        let mut transports = Vec::new();
+        let mut transports = WeightedTransports::new();
 
-        for transport_config in &config.transports {
+        for config in &config.transports {
             let tun = tun.clone();
-            transports.push(match transport_config {
+            let transport = match &config.transport {
                 TransportConfig::HttpClient(config) => HttpClientTransport::new(config, tun).await.map_err(|e| format!(
                     "Failed to initialize HTTP client transport: {e}"))?,
 
@@ -42,7 +42,8 @@ impl Tunnel {
 
                 TransportConfig::Udp(config) => UdpTransport::new(config, tun).await.map_err(|e| format!(
                     "Failed to initialize UDP transport: {e}"))?,
-            });
+            };
+            transports.add(transport, config.weight);
         }
 
         Ok(Tunnel {tun, transports})
@@ -66,11 +67,11 @@ impl Tunnel {
             let packet = &buf[..size];
             util::trace_packet("tun device", packet);
 
-            let transport = self.transports.first().unwrap();
-            if !transport.is_ready() {
+            // FIXME(konishchev): Add metric
+            let Some(transport) = self.transports.select() else {
                 trace!("Dropping the packet: there are no active transports.");
                 continue;
-            }
+            };
 
             trace!("Sending the packet via {}...", transport.name());
             match transport.send(packet).await {
@@ -78,6 +79,7 @@ impl Tunnel {
                     trace!("The packet sent.")
                 },
                 Err(err) => {
+                    // FIXME(konishchev): Add metric
                     trace!("Failed to send the packet via {}: {}.", transport.name(), err);
                 }
             }

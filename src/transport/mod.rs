@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use rand::{self, Rng};
 
 use crate::core::EmptyResult;
 
@@ -10,4 +13,57 @@ pub trait Transport {
     fn name(&self) -> &str;
     fn is_ready(&self) -> bool;
     async fn send(&self, packet: &[u8]) -> EmptyResult;
+}
+
+pub struct WeightedTransports<T: Transport + ?Sized> {
+    transports: Vec<WeightedTransport<T>>,
+}
+
+impl<T: Transport + ?Sized> WeightedTransports<T> {
+    pub fn new() -> WeightedTransports<T> {
+        WeightedTransports {
+            transports: Vec::new(),
+        }
+    }
+
+    pub fn add(&mut self, transport: Arc<T>, weight: u16) {
+        self.transports.push(WeightedTransport {
+            transport,
+            weight,
+        })
+    }
+
+    // FIXME(konishchev): Rewrite
+    pub fn select(&self) -> Option<Arc<T>> {
+        let mut ready_transports = Vec::with_capacity(self.transports.len());
+        let mut total_weight = 0u32;
+
+        for transport in &self.transports {
+            if transport.transport.is_ready() {
+                ready_transports.push(transport);
+                total_weight += u32::from(transport.weight);
+            }
+        }
+
+        if ready_transports.is_empty() {
+            return None;
+        }
+
+        let mut current_weight = 0u32;
+        let selected_weight = rand::thread_rng().gen_range(0..total_weight);
+
+        for transport in ready_transports {
+            current_weight += u32::from(transport.weight);
+            if current_weight > selected_weight {
+                return Some(transport.transport.clone());
+            }
+        }
+
+        unreachable!();
+    }
+}
+
+struct WeightedTransport<T: Transport + ?Sized> {
+    transport: Arc<T>,
+    weight: u16,
 }

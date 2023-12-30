@@ -45,6 +45,7 @@ pub struct HttpServerTransport {
     connections: Arc<Mutex<Vec<Arc<HiddenlinkConnection>>>>,
 }
 
+// FIXME(konishchev): Consider to: TCP_NODELAY, TCP_USER_TIMEOUT, SIOCOUTQ, TCP_INFO, keep alive
 impl HttpServerTransport {
     pub async fn new(config: &HttpServerTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
         let name = format!("HTTP server on {}", config.bind_address);
