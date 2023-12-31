@@ -33,9 +33,14 @@ impl Tunnel {
 
         for config in &config.transports {
             let tun = tun.clone();
+            let name = None; // FIXME(konishchev): Support
+
             let transport = match &config.transport {
-                TransportConfig::HttpClient(config) => HttpClientTransport::new(config, tun).await.map_err(|e| format!(
-                    "Failed to initialize HTTP client transport: {e}"))?,
+                TransportConfig::HttpClient(config) => {
+                    let name = name.unwrap_or_else(|| format!("HTTP client to {}", config.endpoint));
+                    HttpClientTransport::new(name, config, tun).await.map_err(|e| format!(
+                        "Failed to initialize HTTP client transport: {e}"))?
+                },
 
                 TransportConfig::HttpServer(config) => HttpServerTransport::new(config, tun).await.map_err(|e| format!(
                     "Failed to initialize HTTP server transport: {e}"))?,
@@ -43,7 +48,7 @@ impl Tunnel {
                 TransportConfig::Udp(config) => UdpTransport::new(config, tun).await.map_err(|e| format!(
                     "Failed to initialize UDP transport: {e}"))?,
             };
-            transports.add(transport, config.weight);
+            transports.add(transport, config.weight, config.weight);
         }
 
         Ok(Tunnel {tun, transports})

@@ -7,6 +7,8 @@ use tokio::io::AsyncReadExt;
 use crate::{constants, util};
 use crate::core::GenericResult;
 
+pub const MIN_SECRET_LEN: usize = 10;
+
 bitflags! {
     #[derive(Clone, Copy)]
     pub struct ConnectionFlags: u8 {

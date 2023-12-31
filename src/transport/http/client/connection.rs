@@ -19,31 +19,30 @@ use crate::transport::Transport;
 use crate::transport::http::common::{ConnectionFlags, PacketReader};
 use crate::util;
 
+pub struct ConnectionConfig {
+    pub endpoint: String,
+    pub domain: DnsName<'static>,
+    pub client_config: Arc<ClientConfig>,
+    pub flags: ConnectionFlags,
+    pub secret: String,
+}
+
 pub struct Connection {
     name: String,
-    endpoint: String,
-    domain: DnsName<'static>,
-    config: Arc<ClientConfig>,
-    flags: ConnectionFlags,
-    secret: Arc<String>,
+    config: Arc<ConnectionConfig>,
     writer: Mutex<Option<Arc<AsyncMutex<WriteHalf<ClientTlsStream<TcpStream>>>>>>,
 }
 
 impl Connection {
-    pub fn new(
-        id: u64, endpoint: &str, domain: &str, config: Arc<ClientConfig>, flags: ConnectionFlags, secret: Arc<String>,
-    ) -> GenericResult<Connection> {
-        Ok(Connection {
-            name: format!("HTTP connection #{id} to {endpoint}"),
-            endpoint: endpoint.to_owned(),
-            domain: DnsName::try_from(domain.to_owned())?,
+    pub fn new(name: String, config: Arc<ConnectionConfig>) -> Connection {
+        Connection {
+            name,
             config,
-            flags,
-            secret,
             writer: Mutex::new(None),
-        })
+        }
     }
 
+    // FIXME(konishchev): Timeouts
     // FIXME(konishchev): Connection TTL?
     pub async fn handle(&self, tun: Arc<Tun>) {
         loop {
@@ -60,7 +59,7 @@ impl Connection {
 
             self.writer.lock().unwrap().take();
 
-            // FIXME(konishchev): Exponential backoff?
+            // FIXME(konishchev): Exponential backoff / randomization?
             let timeout = Duration::from_secs(3);
             info!("[{}] Reconnecting in {timeout:?}...", self.name);
             time::sleep(timeout).await;
@@ -68,13 +67,14 @@ impl Connection {
     }
 
     async fn process_connect(&self) -> GenericResult<ClientTlsStream<TcpStream>> {
-        trace!("[{}] Establishing new connection...", self.name);
+        let endpoint = &self.config.endpoint;
+        trace!("[{}] Establishing new connection to {}...", self.name, endpoint);
 
-        let tcp_connection = TcpStream::connect(&self.endpoint).await.map_err(|e| format!(
+        let tcp_connection = TcpStream::connect(endpoint).await.map_err(|e| format!(
             "Unable to connect: {e}"))?;
 
-        let domain = ServerName::DnsName(self.domain.clone());
-        let tls_connector = TlsConnector::from(self.config.clone());
+        let domain = ServerName::DnsName(self.config.domain.clone());
+        let tls_connector = TlsConnector::from(self.config.client_config.clone());
 
         let mut tls_connection = tls_connector.connect(domain, tcp_connection).await.map_err(|e| format!(
             "TLS handshake failed: {e}"))?;
@@ -82,13 +82,14 @@ impl Connection {
         self.process_handshake(&mut tls_connection).await.map_err(|e| format!(
             "Hiddenlink handshake failed: {e}"))?;
 
+        trace!("[{}] Connected.", self.name);
         Ok(tls_connection)
     }
 
     async fn process_handshake(&self, connection: &mut ClientTlsStream<TcpStream>) -> EmptyResult {
         // FIXME(konishchev): Send random payload to mimic HTTP client request
-        connection.write_all(self.secret.as_bytes()).await?;
-        connection.write_u8(self.flags.bits()).await?;
+        connection.write_all(self.config.secret.as_bytes()).await?;
+        connection.write_u8(self.config.flags.bits()).await?;
         Ok(())
     }
 
@@ -108,7 +109,7 @@ impl Connection {
                 }
             };
 
-            if !self.flags.contains(ConnectionFlags::INGRESS) {
+            if !self.config.flags.contains(ConnectionFlags::INGRESS) {
                 error!("[{}] Got a packet from non-ingress connection.", self.name);
                 continue;
             }

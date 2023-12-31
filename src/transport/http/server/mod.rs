@@ -16,6 +16,7 @@ use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
+use crate::transport::http::common::MIN_SECRET_LEN;
 use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
 use crate::transport::http::server::server_connection::ServerConnection;
 use crate::transport::http::tls::{self, TlsDomains, TlsDomainConfig};
@@ -26,10 +27,12 @@ pub struct HttpServerTransportConfig {
     bind_address: SocketAddr,
     upstream_address: SocketAddr,
     default_domain: TlsDomainConfig,
+
     #[serde(default)]
     additional_domains: Vec<TlsDomainConfig>,
+
     #[validate(non_control_character)]
-    #[validate(length(min = 1))]
+    #[validate(length(min = "MIN_SECRET_LEN"))]
     secret: String,
 }
 

@@ -7,3 +7,7 @@ transports:
   - type: http-client
     endpoint: server.lan:4000
     secret: GET /secret
+
+    connections: 2
+    connection_min_weight: 50
+    connection_max_weight: 100
