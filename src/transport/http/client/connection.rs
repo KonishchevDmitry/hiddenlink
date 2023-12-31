@@ -1,18 +1,21 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use log::{trace, info, warn, error};
 use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::time;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
 use tokio_tun::Tun;
 
 use crate::core::{GenericResult, EmptyResult};
+use crate::transport::Transport;
 use crate::transport::http::common::{ConnectionFlags, PacketReader};
 use crate::util;
 
@@ -23,6 +26,7 @@ pub struct Connection {
     config: Arc<ClientConfig>,
     flags: ConnectionFlags,
     secret: Arc<String>,
+    writer: Mutex<Option<Arc<AsyncMutex<WriteHalf<ClientTlsStream<TcpStream>>>>>>,
 }
 
 impl Connection {
@@ -36,19 +40,25 @@ impl Connection {
             config,
             flags,
             secret,
+            writer: Mutex::new(None),
         })
     }
 
+    // FIXME(konishchev): Connection TTL?
     pub async fn handle(&self, tun: Arc<Tun>) {
         loop {
             match self.process_connect().await {
                 Ok(connection) => {
-                    self.process_connection(connection, tun.clone()).await;
+                    let (reader, writer) = tokio::io::split(connection);
+                    self.writer.lock().unwrap().replace(Arc::new(AsyncMutex::new(writer)));
+                    self.process_connection(reader, tun.clone()).await;
                 },
                 Err(err) => {
                     warn!("[{}] Failed to establish hiddenlink connection: {err}", self.name);
                 },
             };
+
+            self.writer.lock().unwrap().take();
 
             // FIXME(konishchev): Exponential backoff?
             let timeout = Duration::from_secs(3);
@@ -82,7 +92,7 @@ impl Connection {
         Ok(())
     }
 
-    async fn process_connection(&self, connection: ClientTlsStream<TcpStream>, tun: Arc<Tun>) {
+    async fn process_connection(&self, connection: ReadHalf<ClientTlsStream<TcpStream>>, tun: Arc<Tun>) {
         let mut packet_reader = PacketReader::new(Bytes::new(), connection);
 
         loop {
@@ -111,5 +121,29 @@ impl Connection {
         }
 
         // FIXME(konishchev): Shutdown
+    }
+}
+
+#[async_trait]
+impl Transport for Connection {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    // FIXME(konishchev): Implement
+    fn is_ready(&self) -> bool {
+        self.writer.lock().unwrap().is_some()
+    }
+
+    // FIXME(konishchev): Implement
+    async fn send(&self, packet: &[u8]) -> EmptyResult {
+        let writer = self.writer.lock().unwrap().clone();
+
+        if let Some(writer) = writer {
+            let mut writer = writer.lock().await;
+            writer.write_all(packet).await?;
+        }
+
+        Ok(())
     }
 }

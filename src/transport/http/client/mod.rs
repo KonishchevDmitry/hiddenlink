@@ -27,10 +27,7 @@ pub struct HttpClientTransportConfig {
 
 pub struct HttpClientTransport {
     name: String,
-    endpoint: String,
-    domain: String,
-    config: Arc<ClientConfig>,
-    secret: Arc<String>,
+    connections: Vec<Arc<Connection>>,
 }
 
 impl HttpClientTransport {
@@ -52,30 +49,25 @@ impl HttpClientTransport {
             .with_root_certificates(roots)
             .with_no_client_auth());
 
+        // FIXME(konishchev): Timeouts
+        // FIXME(konishchev): Rewrite
+        // FIXME(konishchev): unwrap
+        let connection = Arc::new(Connection::new(
+            0, &config.endpoint, &domain, client_config.clone(), ConnectionFlags::all(), secret.clone()).unwrap());
+
         let transport = Arc::new(HttpClientTransport{
             name,
-            endpoint: config.endpoint.clone(),
-            domain,
-            config: client_config,
-            secret,
+            connections: vec![connection.clone()],
         });
 
-        {
-            let transport = transport.clone();
+        for connection in transport.connections.iter().cloned() {
+            let tun = tun.clone();
             tokio::spawn(async move {
-                transport.handle(tun).await;
+                connection.handle(tun).await;
             });
         }
 
         Ok(transport)
-    }
-
-    async fn handle(&self, tun: Arc<Tun>) {
-        // FIXME(konishchev): Timeouts
-        // FIXME(konishchev): Rewrite
-        let connection = Connection::new(
-            0, &self.endpoint, &self.domain, self.config.clone(), ConnectionFlags::all(), self.secret.clone()).unwrap();
-        connection.handle(tun).await;
     }
 }
 
@@ -87,11 +79,11 @@ impl Transport for HttpClientTransport {
 
     // FIXME(konishchev): Implement
     fn is_ready(&self) -> bool {
-        false
+        self.connections.first().unwrap().is_ready()
     }
 
     // FIXME(konishchev): Implement
-    async fn send(&self, _: &[u8]) -> EmptyResult {
-        todo!()
+    async fn send(&self, packet: &[u8]) -> EmptyResult {
+        self.connections.first().unwrap().send(packet).await
     }
 }
