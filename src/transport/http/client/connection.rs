@@ -137,7 +137,7 @@ impl Transport for Connection {
 
     // FIXME(konishchev): Implement
     fn is_ready(&self) -> bool {
-        self.writer.lock().unwrap().is_some()
+        self.config.flags.contains(ConnectionFlags::EGRESS) && self.writer.lock().unwrap().is_some()
     }
 
     // FIXME(konishchev): Implement

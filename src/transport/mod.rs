@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rand::{self, Rng};
+use rand::Rng;
 
 use crate::core::EmptyResult;
 
@@ -34,6 +34,12 @@ impl<T: Transport + ?Sized> WeightedTransports<T> {
             weight: rand::thread_rng().gen_range(min_weight..=max_weight),
         });
         self.transports.last().unwrap()
+    }
+
+    pub fn remove(&mut self, transport: Arc<T>) {
+        self.transports.swap_remove(self.transports.iter().position(|weighted| {
+            Arc::ptr_eq(&weighted.transport, &transport)
+        }).unwrap());
     }
 
     pub fn len(&self) -> usize {
