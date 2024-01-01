@@ -48,7 +48,7 @@ pub struct HttpServerTransport {
     connections: Arc<Mutex<Vec<Arc<HiddenlinkConnection>>>>,
 }
 
-// FIXME(konishchev): Consider to: TCP_NODELAY, TCP_USER_TIMEOUT, SIOCOUTQ, TCP_INFO, keep alive
+// FIXME(konishchev): Consider to: SIOCOUTQ, TCP_INFO
 impl HttpServerTransport {
     pub async fn new(config: &HttpServerTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
         let name = format!("HTTP server on {}", config.bind_address);
@@ -92,7 +92,6 @@ impl HttpServerTransport {
     async fn handle(&self, listener: TcpListener, tun: Arc<Tun>) {
         loop {
             // FIXME(konishchev): Add semaphore
-            // FIXME(konishchev): Timeouts?
 
             let (connection, peer_addr) = match listener.accept().await {
                 Ok(result) => result,

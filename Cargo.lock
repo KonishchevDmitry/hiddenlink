@@ -554,6 +554,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_yaml",
+ "socket2",
  "tokio",
  "tokio-rustls",
  "tokio-tun",

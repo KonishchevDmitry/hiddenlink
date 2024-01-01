@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use log::{trace, warn};
@@ -7,14 +8,18 @@ use rustls::ClientConfig;
 use rustls::server::Acceptor;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::net::TcpStream;
+use tokio::time::error::Elapsed;
 use tokio_rustls::LazyConfigAcceptor;
 use tokio_rustls::server::TlsStream;
 
-use crate::core::GenericResult;
-use crate::transport::http::common::ConnectionFlags;
+use crate::core::{GenericResult, ResultTools};
+use crate::transport::http::common::{ConnectionFlags, configure_socket_timeout, pre_configure_hiddenlink_socket,
+    post_configure_hiddenlink_socket};
 use crate::transport::http::server::proxied_connection::ProxiedConnection;
 use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
 use crate::transport::http::tls::TlsDomains;
+
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);  // Standard nginx timeout
 
 pub struct ServerConnection {
     name: String,
@@ -43,24 +48,33 @@ impl ServerConnection {
     }
 
     pub async fn handle(self, tcp_connection: TcpStream) -> Option<HiddenlinkConnection> {
-        let (mut tls_connection, upstream_domain) = self.process_tls_handshake(tcp_connection).await?;
+        let process_routing_decision = tokio::time::timeout(
+            CONNECTION_TIMEOUT,
+            self.process_routing_decision(tcp_connection));
 
-        let hiddenlink_connection = match self.process_hiddenlink_handshake(&mut tls_connection).await {
-            Ok(ConnectionType::Hiddenlink(flags, preread_data)) => {
+        let decision = process_routing_decision.await.ok_or_handle_error(|_err: Elapsed| {
+            trace!("[{}] The connection has timed out.", self.name);
+        })?;
+
+        let hiddenlink_connection = match decision? {
+            RoutingDecision::Hiddenlink {flags, preread_data, connection} => {
                 trace!("[{}] The client has passed hiddenlink handshake.", self.name);
-                HiddenlinkConnection::new(self.name, flags, preread_data, tls_connection)
+                HiddenlinkConnection::new(self.name, flags, preread_data, connection)
             },
-            Ok(ConnectionType::Proxied(preread_data)) => {
-                self.process_request_proxying(preread_data, tls_connection, upstream_domain).await;
-                return None;
-            },
-            Err(err) => {
-                trace!("[{}] {}.", self.name, err);
+            RoutingDecision::Proxy {preread_data, connection, upstream_domain} => {
+                self.process_request_proxying(preread_data, connection, &upstream_domain).await;
                 return None;
             },
         };
 
         Some(hiddenlink_connection)
+    }
+
+    async fn process_routing_decision(&self, tcp_connection: TcpStream) -> Option<RoutingDecision> {
+        let (tls_connection, upstream_domain) = self.process_tls_handshake(tcp_connection).await?;
+        self.process_hiddenlink_handshake(tls_connection, upstream_domain).await.ok_or_handle_error(|err| {
+            trace!("[{}] Connection is broken: {err}.", self.name);
+        })
     }
 
     async fn process_tls_handshake(&self, tcp_connection: TcpStream) -> Option<(TlsStream<TcpStream>, &str)> {
@@ -71,7 +85,7 @@ impl ServerConnection {
             Ok(handshake) => handshake,
             Err(err) => {
                 // FIXME(konishchev): Check for ECONNRESET?
-                trace!("[{}] TLS handshake failed: {}.", self.name, err);
+                trace!("[{}] TLS handshake failed: {err}.", self.name);
                 if let Some(tcp_connection) = tls_acceptor.take_io() {
                     self.handle_tls_handshake_error(tcp_connection).await;
                 }
@@ -89,7 +103,7 @@ impl ServerConnection {
         let tls_connection = match tls_handshake.into_stream(config).into_fallible().await {
             Ok(tls_connection) => tls_connection,
             Err((err, tcp_connection)) => {
-                trace!("[{}] TLS handshake failed: {}.", self.name, err);
+                trace!("[{}] TLS handshake failed: {err}.", self.name);
                 self.handle_tls_handshake_error(tcp_connection).await;
                 return None;
             },
@@ -106,31 +120,44 @@ impl ServerConnection {
         self.proxy_request(invalid_request, tcp_connection, true, upstream_domain).await
     }
 
-    async fn process_hiddenlink_handshake(&self, connection: &mut TlsStream<TcpStream>) -> GenericResult<ConnectionType> {
+    async fn process_hiddenlink_handshake(&self, mut connection: TlsStream<TcpStream>, upstream_domain: &str) -> GenericResult<RoutingDecision> {
         let secret = self.secret.as_bytes();
         let mut buf = BytesMut::with_capacity(secret.len());
 
         loop {
-            let size = connection.read_buf(&mut buf).await.map_err(|e| format!(
-                "Connection is broken: {}", e))?;
+            let size = connection.read_buf(&mut buf).await?;
 
             if buf.len() > secret.len() {
-                let mut buf = buf.freeze();
+                if &buf[..secret.len()] != secret {
+                    break;
+                }
 
-                return Ok(if &buf[..secret.len()] == secret {
-                    let raw_flags = buf[secret.len()];
+                let raw_flags = buf[secret.len()];
+                let flags = ConnectionFlags::from_bits(raw_flags).ok_or_else(|| format!(
+                    "Hiddenlink handshake failed: Invalid connection flags: {raw_flags:08b}"))?;
 
-                    let flags = ConnectionFlags::from_bits(raw_flags).ok_or_else(|| format!(
-                        "Hiddenlink handshake failed: Invalid connection flags: {raw_flags:08b}"))?;
+                let tcp_connection = connection.get_ref().0;
+                pre_configure_hiddenlink_socket(tcp_connection)
+                    .and_then(|()| post_configure_hiddenlink_socket(tcp_connection))
+                    .map_err(|e| format!("Failed to configure hiddenlink connection: {e}"))?;
 
-                    ConnectionType::Hiddenlink(flags, buf.split_off(secret.len() + 1))
-                } else {
-                    ConnectionType::Proxied(buf)
-                });
+                return Ok(RoutingDecision::Hiddenlink {
+                    flags,
+                    preread_data: buf.freeze().split_off(secret.len() + 1),
+                    connection,
+                })
             } else if size == 0 || buf != secret[..buf.len()] {
-                return Ok(ConnectionType::Proxied(buf.freeze()));
+                break;
             }
         }
+
+        configure_socket_timeout(connection.get_ref().0, CONNECTION_TIMEOUT, None)?;
+
+        Ok(RoutingDecision::Proxy {
+            preread_data: buf.freeze(),
+            connection,
+            upstream_domain: upstream_domain.to_owned(),
+        })
     }
 
     async fn process_request_proxying(&self, preread_data: Bytes, connection: TlsStream<TcpStream>, upstream_domain: &str) {
@@ -156,7 +183,15 @@ impl ServerConnection {
     }
 }
 
-enum ConnectionType {
-    Hiddenlink(ConnectionFlags, Bytes),
-    Proxied(Bytes),
+enum RoutingDecision {
+    Hiddenlink {
+        flags: ConnectionFlags,
+        preread_data: Bytes,
+        connection: TlsStream<TcpStream>,
+    },
+    Proxy {
+        preread_data: Bytes,
+        connection: TlsStream<TcpStream>,
+        upstream_domain: String,
+    },
 }

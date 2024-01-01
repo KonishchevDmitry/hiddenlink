@@ -54,6 +54,7 @@ impl UdpTransport {
         let mut buf = BytesMut::zeroed(constants::MTU - constants::IPV4_HEADER_SIZE - constants::UDP_HEADER_SIZE);
 
         loop {
+            // FIXME(konishchev): Check truncate flag
             let size = match self.socket.recv_from(&mut buf).await {
                 Ok((size, _)) => {
                     if size == 0 {

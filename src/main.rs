@@ -30,6 +30,12 @@ fn main() {
         process::exit(1);
     }
 
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_panic_hook(info);
+        std::process::abort();
+    }));
+
     if let Err(e) = run(&global) {
         error!("{}.", e);
         process::exit(1);

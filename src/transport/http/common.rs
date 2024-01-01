@@ -1,11 +1,14 @@
 use std::marker::Unpin;
+use std::time::Duration;
 
 use bitflags::bitflags;
 use bytes::{Bytes, BytesMut, Buf};
+use socket2::{SockRef, TcpKeepalive};
 use tokio::io::AsyncReadExt;
+use tokio::net::TcpStream;
 
 use crate::{constants, util};
-use crate::core::GenericResult;
+use crate::core::{GenericResult, EmptyResult};
 
 pub const MIN_SECRET_LEN: usize = 10;
 
@@ -84,4 +87,35 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
 enum PacketReaderState {
     ReadSize{to_drop: usize},
     ReadPacket{packet_size: usize},
+}
+
+pub fn pre_configure_hiddenlink_socket(connection: &TcpStream) -> EmptyResult {
+    configure_socket_timeout(connection, Duration::from_secs(10), Some(
+        TcpKeepalive::new()
+            .with_time(Duration::from_secs(5))
+            .with_interval(Duration::from_secs(1))
+            .with_retries(5)
+    ))
+}
+
+pub fn post_configure_hiddenlink_socket(connection: &TcpStream) -> EmptyResult {
+    // When hiddenlink handshake is completed, all subsequent writes to the socket will contain actual packets, so
+    // disable Nagle algorithm to not delay them. But please note that small packets can actually reveal our tunnel
+    // when we use simplex HTTPS masking.
+    Ok(connection.set_nodelay(true).map_err(|e| format!(
+        "Failed to set TCP_NODELAY socket option: {e}"))?)
+}
+
+pub fn configure_socket_timeout(connection: &TcpStream, timeout: Duration, keep_alive: Option<TcpKeepalive>) -> EmptyResult {
+    let socket = SockRef::from(connection);
+
+    socket.set_tcp_user_timeout(Some(timeout)).map_err(|e| format!(
+        "Failed to set TCP_USER_TIMEOUT socket option: {e}"))?;
+
+    if let Some(keep_alive) = keep_alive {
+        socket.set_tcp_keepalive(&keep_alive).map_err(|e| format!(
+            "Failed to configure TCP keepalive: {e}"))?;
+    }
+
+    Ok(())
 }
