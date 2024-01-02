@@ -5,8 +5,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use log::{trace, info, warn, error};
-use prometheus_client::metrics::MetricType;
-use prometheus_client::metrics::counter::Counter;
 use prometheus_client::encoding::{CounterValueEncoder, DescriptorEncoder, EncodeMetric};
 use prometheus_client::metrics::gauge::ConstGauge;
 use rustls::ClientConfig;
@@ -20,12 +18,10 @@ use tokio_tun::Tun;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
-use crate::transport::http::common::{self, ConnectionFlags, PacketReader, pre_configure_hiddenlink_socket,
+use crate::transport::http::common::{self, ConnectionFlags, PacketReader, PacketWriter, pre_configure_hiddenlink_socket,
     post_configure_hiddenlink_socket};
 use crate::transport::metrics::Labels;
 use crate::util;
-
-type PacketWriter = common::PacketWriter<WriteHalf<ClientTlsStream<TcpStream>>>;
 
 pub struct ConnectionConfig {
     pub endpoint: String,
@@ -38,17 +34,16 @@ pub struct ConnectionConfig {
 pub struct Connection {
     name: String,
     config: Arc<ConnectionConfig>,
-    writer: Mutex<Option<Arc<PacketWriter>>>,
-    dropped_packets: Counter,
+    writer: PacketWriter<WriteHalf<ClientTlsStream<TcpStream>>>,
 }
 
 impl Connection {
     pub fn new(name: String, config: Arc<ConnectionConfig>) -> Connection {
+        let writer = PacketWriter::new(&name);
         Connection {
             name,
             config,
-            writer: Mutex::new(None),
-            dropped_packets: Counter::default(),
+            writer,
         }
     }
 
@@ -59,7 +54,7 @@ impl Connection {
                 Ok(connection) => {
                     let fd = connection.as_raw_fd();
                     let (reader, writer) = tokio::io::split(connection);
-                    self.writer.lock().unwrap().replace(Arc::new(PacketWriter::new(fd, writer)));
+                    self.writer.replace(fd, writer);
                     self.process_connection(reader, tun.clone()).await;
                 },
                 Err(err) => {
@@ -67,7 +62,7 @@ impl Connection {
                 },
             };
 
-            self.writer.lock().unwrap().take();
+            self.writer.reset();
 
             // FIXME(konishchev): Exponential backoff / randomization?
             let timeout = Duration::from_secs(3);
@@ -145,40 +140,14 @@ impl Transport for Connection {
     }
 
     fn is_ready(&self) -> bool {
-        self.config.flags.contains(ConnectionFlags::EGRESS) && self.writer.lock().unwrap().is_some()
+        self.config.flags.contains(ConnectionFlags::EGRESS) && self.writer.is_ready()
     }
 
-    // FIXME(konishchev): Implement
     fn collect(&self, encoder: &mut DescriptorEncoder) {
-        // encoder.encode_descriptor(
-        //     "dropped_packets",
-        //     "some help",
-        //     None,
-        //     self.dropped_packets.metric_type(),
-        // )?.encode_counter(&self.dropped_packets.get(), Some(&Labels {transport: self.name.to_owned()}));
-
-        let mut family_encoder = encoder.encode_descriptor(
-            "remote_protocols",
-            "Number of connected nodes supporting a specific protocol, with \"unrecognized\" for each peer supporting one or more unrecognized protocols",
-            None,
-            MetricType::Gauge,
-        ).unwrap();
-
-        let labels = [("protocol", self.name.as_str())];
-        let metric_encoder = family_encoder.encode_family(&labels).unwrap();
-        let metric = ConstGauge::new(42);
-        metric.encode(metric_encoder).unwrap();
+        self.writer.collect(encoder)
     }
 
     async fn send(&self, packet: &[u8]) -> EmptyResult {
-        let writer = self.writer.lock().unwrap().as_ref().ok_or_else(|| {
-            self.dropped_packets.inc();
-            "Connection is closed"
-        })?.clone();
-
-        writer.send(packet).await.map_err(|e| {
-            self.dropped_packets.inc();
-            e
-        })
+        self.writer.send(packet).await
     }
 }

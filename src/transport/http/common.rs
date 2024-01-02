@@ -1,11 +1,16 @@
 use std::marker::Unpin;
 use std::os::fd::RawFd;
 use std::os::raw::{c_int, c_ulong};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use bitflags::bitflags;
 use bytes::{Bytes, BytesMut, Buf};
 use nix::ioctl_read_bad;
+use prometheus_client::metrics::MetricType;
+use prometheus_client::metrics::counter::Counter;
+use prometheus_client::encoding::{CounterValueEncoder, DescriptorEncoder, EncodeMetric};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -13,6 +18,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::{constants, util};
 use crate::core::{GenericResult, EmptyResult};
+use crate::transport::Transport;
 
 pub const MIN_SECRET_LEN: usize = 10;
 
@@ -93,23 +99,75 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
     }
 }
 
-pub struct PacketWriter<C: AsyncWriteExt + Unpin> {
+pub struct PacketWriter<C: AsyncWriteExt + Send + Sync + Unpin> {
+    name: String,
+    writer: Mutex<Option<Arc<PacketWriterConnection<C>>>>,
+    dropped_packets: Counter,
+}
+
+struct PacketWriterConnection<C> {
     fd: RawFd,
     connection: AsyncMutex<C>,
 }
 
-impl<C: AsyncWriteExt + Unpin> PacketWriter<C> {
-    pub fn new(fd: RawFd, connection: C) -> PacketWriter<C> {
+impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
+    pub fn new(name: &str) -> PacketWriter<C> {
         PacketWriter {
-            fd,
-            connection: AsyncMutex::new(connection),
+            name: name.to_owned(),
+            writer: Mutex::default(),
+            dropped_packets: Counter::default(),
         }
     }
 
-    pub async fn send(&self, packet: &[u8]) -> EmptyResult {
-        let mut connection = self.connection.lock().await;
+    pub fn replace(&self, fd: RawFd, connection: C) {
+        self.writer.lock().unwrap().replace(Arc::new(PacketWriterConnection {
+            fd,
+            connection: AsyncMutex::new(connection),
+        }));
+    }
+
+    pub fn reset(&self) {
+        // FIXME(konishchev): Shutdown
+        self.writer.lock().unwrap().take();
+    }
+ }
+
+ #[async_trait]
+ impl<C: AsyncWriteExt + Send + Sync + Unpin> Transport for PacketWriter<C> {
+    fn name(&self) ->  &str {
+        &self.name
+    }
+
+    fn is_ready(&self) -> bool {
+        self.writer.lock().unwrap().is_some()
+    }
+
+    // XXX(konishchev): Implement
+    fn collect(&self, encoder: &mut DescriptorEncoder) {
+        let mut family_encoder = encoder.encode_descriptor(
+            "dropped_packets",
+            "Dropped packets count",
+            None,
+            MetricType::Counter,
+        ).unwrap();
+
+        let labels = [("transport", self.name.as_str())];
+        let metric_encoder = family_encoder.encode_family(&labels).unwrap();
+        self.dropped_packets.encode(metric_encoder).unwrap();
+    }
+
+    async fn send(&self, packet: &[u8]) -> EmptyResult {
+        let writer = self.writer.lock().unwrap().as_ref().ok_or_else(|| {
+            self.dropped_packets.inc();
+            "Connection is closed"
+        })?.clone();
+
+        writer.connection.lock().await.write_all(packet).await.map_err(|e| {
+            self.dropped_packets.inc();
+            e
+        })?;
+
         // FIXME(konishchev): ioctl_siocoutq: 84 -> 106
-        connection.write_all(packet).await?;
         Ok(())
     }
 }
