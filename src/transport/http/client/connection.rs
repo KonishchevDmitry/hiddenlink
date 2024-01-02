@@ -1,3 +1,4 @@
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,7 +9,6 @@ use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
 use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex as AsyncMutex;
 use tokio::time;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
@@ -16,9 +16,11 @@ use tokio_tun::Tun;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
-use crate::transport::http::common::{ConnectionFlags, PacketReader, pre_configure_hiddenlink_socket,
+use crate::transport::http::common::{self, ConnectionFlags, PacketReader, pre_configure_hiddenlink_socket,
     post_configure_hiddenlink_socket};
 use crate::util;
+
+type PacketWriter = common::PacketWriter<WriteHalf<ClientTlsStream<TcpStream>>>;
 
 pub struct ConnectionConfig {
     pub endpoint: String,
@@ -31,7 +33,7 @@ pub struct ConnectionConfig {
 pub struct Connection {
     name: String,
     config: Arc<ConnectionConfig>,
-    writer: Mutex<Option<Arc<AsyncMutex<WriteHalf<ClientTlsStream<TcpStream>>>>>>,
+    writer: Mutex<Option<Arc<PacketWriter>>>,
 }
 
 impl Connection {
@@ -43,14 +45,14 @@ impl Connection {
         }
     }
 
-    // FIXME(konishchev): Timeouts
     // FIXME(konishchev): Connection TTL?
     pub async fn handle(&self, tun: Arc<Tun>) {
         loop {
             match self.process_connect().await {
                 Ok(connection) => {
+                    let fd = connection.as_raw_fd();
                     let (reader, writer) = tokio::io::split(connection);
-                    self.writer.lock().unwrap().replace(Arc::new(AsyncMutex::new(writer)));
+                    self.writer.lock().unwrap().replace(Arc::new(PacketWriter::new(fd, writer)));
                     self.process_connection(reader, tun.clone()).await;
                 },
                 Err(err) => {
@@ -135,20 +137,12 @@ impl Transport for Connection {
         &self.name
     }
 
-    // FIXME(konishchev): Implement
     fn is_ready(&self) -> bool {
         self.config.flags.contains(ConnectionFlags::EGRESS) && self.writer.lock().unwrap().is_some()
     }
 
-    // FIXME(konishchev): Implement
     async fn send(&self, packet: &[u8]) -> EmptyResult {
-        let writer = self.writer.lock().unwrap().clone();
-
-        if let Some(writer) = writer {
-            let mut writer = writer.lock().await;
-            writer.write_all(packet).await?;
-        }
-
-        Ok(())
+        let writer = self.writer.lock().unwrap().as_ref().ok_or("Connection is closed")?.clone();
+        writer.send(packet).await
     }
 }

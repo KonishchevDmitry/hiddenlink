@@ -545,6 +545,7 @@ dependencies = [
  "host-port-pair",
  "itertools",
  "log",
+ "nix",
  "pktparse",
  "rand",
  "rstest",

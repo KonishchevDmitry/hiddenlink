@@ -1,11 +1,15 @@
 use std::marker::Unpin;
+use std::os::fd::RawFd;
+use std::os::raw::{c_int, c_ulong};
 use std::time::Duration;
 
 use bitflags::bitflags;
 use bytes::{Bytes, BytesMut, Buf};
+use nix::ioctl_read_bad;
 use socket2::{SockRef, TcpKeepalive};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::{constants, util};
 use crate::core::{GenericResult, EmptyResult};
@@ -24,6 +28,11 @@ pub struct PacketReader<C: AsyncReadExt + Unpin> {
     buf: BytesMut,
     connection: C,
     state: PacketReaderState,
+}
+
+enum PacketReaderState {
+    ReadSize{to_drop: usize},
+    ReadPacket{packet_size: usize},
 }
 
 impl<C: AsyncReadExt + Unpin> PacketReader<C> {
@@ -84,9 +93,25 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
     }
 }
 
-enum PacketReaderState {
-    ReadSize{to_drop: usize},
-    ReadPacket{packet_size: usize},
+pub struct PacketWriter<C: AsyncWriteExt + Unpin> {
+    fd: RawFd,
+    connection: AsyncMutex<C>,
+}
+
+impl<C: AsyncWriteExt + Unpin> PacketWriter<C> {
+    pub fn new(fd: RawFd, connection: C) -> PacketWriter<C> {
+        PacketWriter {
+            fd,
+            connection: AsyncMutex::new(connection),
+        }
+    }
+
+    pub async fn send(&self, packet: &[u8]) -> EmptyResult {
+        let mut connection = self.connection.lock().await;
+        // FIXME(konishchev): ioctl_siocoutq: 84 -> 106
+        connection.write_all(packet).await?;
+        Ok(())
+    }
 }
 
 pub fn pre_configure_hiddenlink_socket(connection: &TcpStream) -> EmptyResult {
@@ -119,3 +144,7 @@ pub fn configure_socket_timeout(connection: &TcpStream, timeout: Duration, keep_
 
     Ok(())
 }
+
+// man 7 tcp: returns the amount of unsent data in the socket send queue.
+const SIOCOUTQ: c_ulong = 0x5411;
+ioctl_read_bad!(ioctl_siocoutq, SIOCOUTQ, c_int);
