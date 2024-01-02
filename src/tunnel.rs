@@ -96,17 +96,11 @@ impl Tunnel {
     }
 }
 
-// XXX(konishchev): Implement
 impl Collector for Tunnel {
     fn encode(&self, mut encoder: DescriptorEncoder) -> std::fmt::Result {
-        let counter = ConstCounter::new(42);
-        let metric_encoder = encoder.encode_descriptor(
-            "my_counter",
-            "some help",
-            None,
-            counter.metric_type(),
-        )?;
-        counter.encode(metric_encoder)?;
+        for weighted in self.transports.iter() {
+            weighted.transport.collect(&mut encoder);
+        }
         Ok(())
     }
 }

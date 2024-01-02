@@ -6,6 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use host_port_pair::HostPortPair;
 use log::{trace, debug};
+use prometheus_client::encoding::DescriptorEncoder;
 use rustls::ClientConfig;
 use rustls::pki_types::DnsName;
 use serde_derive::{Serialize, Deserialize};
@@ -132,6 +133,13 @@ impl Transport for HttpClientTransport {
 
     fn is_ready(&self) -> bool {
         self.connections.is_ready()
+    }
+
+    // FIXME(konishchev): Implement
+    fn collect(&self, encoder: &mut DescriptorEncoder) {
+        for weighted in self.connections.iter() {
+            weighted.transport.collect(encoder);
+        }
     }
 
     async fn send(&self, packet: &[u8]) -> EmptyResult {

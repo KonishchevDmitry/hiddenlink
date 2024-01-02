@@ -5,6 +5,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use log::{trace, info, warn, error};
+use prometheus_client::metrics::MetricType;
+use prometheus_client::metrics::counter::Counter;
+use prometheus_client::encoding::{CounterValueEncoder, DescriptorEncoder, EncodeMetric};
+use prometheus_client::metrics::gauge::ConstGauge;
 use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
 use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
@@ -18,6 +22,7 @@ use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
 use crate::transport::http::common::{self, ConnectionFlags, PacketReader, pre_configure_hiddenlink_socket,
     post_configure_hiddenlink_socket};
+use crate::transport::metrics::Labels;
 use crate::util;
 
 type PacketWriter = common::PacketWriter<WriteHalf<ClientTlsStream<TcpStream>>>;
@@ -34,6 +39,7 @@ pub struct Connection {
     name: String,
     config: Arc<ConnectionConfig>,
     writer: Mutex<Option<Arc<PacketWriter>>>,
+    dropped_packets: Counter,
 }
 
 impl Connection {
@@ -42,6 +48,7 @@ impl Connection {
             name,
             config,
             writer: Mutex::new(None),
+            dropped_packets: Counter::default(),
         }
     }
 
@@ -141,8 +148,37 @@ impl Transport for Connection {
         self.config.flags.contains(ConnectionFlags::EGRESS) && self.writer.lock().unwrap().is_some()
     }
 
+    // FIXME(konishchev): Implement
+    fn collect(&self, encoder: &mut DescriptorEncoder) {
+        // encoder.encode_descriptor(
+        //     "dropped_packets",
+        //     "some help",
+        //     None,
+        //     self.dropped_packets.metric_type(),
+        // )?.encode_counter(&self.dropped_packets.get(), Some(&Labels {transport: self.name.to_owned()}));
+
+        let mut family_encoder = encoder.encode_descriptor(
+            "remote_protocols",
+            "Number of connected nodes supporting a specific protocol, with \"unrecognized\" for each peer supporting one or more unrecognized protocols",
+            None,
+            MetricType::Gauge,
+        ).unwrap();
+
+        let labels = [("protocol", self.name.as_str())];
+        let metric_encoder = family_encoder.encode_family(&labels).unwrap();
+        let metric = ConstGauge::new(42);
+        metric.encode(metric_encoder).unwrap();
+    }
+
     async fn send(&self, packet: &[u8]) -> EmptyResult {
-        let writer = self.writer.lock().unwrap().as_ref().ok_or("Connection is closed")?.clone();
-        writer.send(packet).await
+        let writer = self.writer.lock().unwrap().as_ref().ok_or_else(|| {
+            self.dropped_packets.inc();
+            "Connection is closed"
+        })?.clone();
+
+        writer.send(packet).await.map_err(|e| {
+            self.dropped_packets.inc();
+            e
+        })
     }
 }

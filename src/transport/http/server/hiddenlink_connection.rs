@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use log::{info, warn, error};
+use prometheus_client::encoding::DescriptorEncoder;
 use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -75,6 +76,10 @@ impl Transport for HiddenlinkConnection {
     // FIXME(konishchev): Check socket buffers?
     fn is_ready(&self) -> bool {
         self.flags.contains(ConnectionFlags::INGRESS)
+    }
+
+    // FIXME(konishchev): Implement
+    fn collect(&self, _encoder: &mut DescriptorEncoder) {
     }
 
     // FIXME(konishchev): Implement

@@ -1,17 +1,20 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use prometheus_client::encoding::DescriptorEncoder;
 use rand::Rng;
 
 use crate::core::EmptyResult;
 
 pub mod http;
+mod metrics;
 pub mod udp;
 
 #[async_trait]
 pub trait Transport: Send + Sync {
     fn name(&self) -> &str;
     fn is_ready(&self) -> bool;
+    fn collect(&self, encoder: &mut DescriptorEncoder);
     async fn send(&self, packet: &[u8]) -> EmptyResult;
 }
 
@@ -48,6 +51,10 @@ impl<T: Transport + ?Sized> WeightedTransports<T> {
 
     pub fn is_ready(&self) -> bool {
         self.transports.iter().any(|weighted| weighted.transport.is_ready())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item=&WeightedTransport<T>> {
+        self.transports.iter()
     }
 
     // FIXME(konishchev): Rewrite

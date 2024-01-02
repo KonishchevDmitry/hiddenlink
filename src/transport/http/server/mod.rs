@@ -8,6 +8,7 @@ use std::net::SocketAddr;
 
 use async_trait::async_trait;
 use log::{trace, info, error};
+use prometheus_client::encoding::DescriptorEncoder;
 use rustls::ClientConfig;
 use serde_derive::{Serialize, Deserialize};
 use tokio::net::TcpListener;
@@ -137,6 +138,10 @@ impl Transport for HttpServerTransport {
 
     fn is_ready(&self) -> bool {
         self.connections.lock().unwrap().is_ready()
+    }
+
+    // FIXME(konishchev): Implement
+    fn collect(&self, _encoder: &mut DescriptorEncoder) {
     }
 
     async fn send(&self, packet: &[u8]) -> EmptyResult {

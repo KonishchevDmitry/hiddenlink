@@ -4,6 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::BytesMut;
 use log::{info, error};
+use prometheus_client::encoding::DescriptorEncoder;
 use serde_derive::{Serialize, Deserialize};
 use tokio::net::UdpSocket;
 use tokio_tun::Tun;
@@ -87,6 +88,10 @@ impl Transport for UdpTransport {
 
     fn is_ready(&self) -> bool {
         true
+    }
+
+    // FIXME(konishchev): Implement
+    fn collect(&self, _encoder: &mut DescriptorEncoder) {
     }
 
     async fn send(&self, buf: &[u8]) -> EmptyResult {
