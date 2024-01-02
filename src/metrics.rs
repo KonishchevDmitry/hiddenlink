@@ -10,19 +10,38 @@ use axum::{
     routing::get,
 };
 use log::{trace, info, error};
-use prometheus_client::registry::Registry;
+use prometheus_client::{
+    encoding::DescriptorEncoder,
+    collector::Collector,
+    registry::Registry
+};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 use crate::core::GenericResult;
+
+#[derive(Debug)]
+pub struct ArcCollector<T: Collector>(Arc<T>);
+
+impl<T: Collector> ArcCollector<T> {
+    pub fn new(collector: Arc<T>) -> Box<ArcCollector<T>> {
+        Box::new(ArcCollector(collector))
+    }
+}
+
+impl<T: Collector> Collector for ArcCollector<T> {
+    fn encode(&self, encoder: DescriptorEncoder) -> Result<(), std::fmt::Error> {
+        self.0.encode(encoder)
+    }
+}
 
 pub async fn run(bind_address: SocketAddr, registry: Registry) -> GenericResult<JoinHandle<std::io::Result<()>>> {
     let listener = TcpListener::bind(bind_address).await.map_err(|e| format!(
         "Unable to bind to {bind_address}: {e}"))?;
 
     let app = Router::new()
-        .layer(middleware::from_fn(logging_middleware))
         .route("/metrics", get(get_metrics))
+        .layer(middleware::from_fn(logging_middleware))
         .with_state(Arc::new(registry));
 
     info!("[Metrics] Listening on {bind_address}.");

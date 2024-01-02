@@ -3,18 +3,23 @@
 mod cli;
 mod config;
 mod constants;
+mod metrics;
 mod transport;
 mod tunnel;
 mod util;
 
+use std::future::Future;
 use std::io::{self, Write};
 use std::process;
+use std::sync::Arc;
 
 use log::error;
+use prometheus_client::registry::Registry;
 
 use crate::cli::{GlobalOptions, Parser};
 use crate::config::Config;
 use crate::core::EmptyResult;
+use crate::metrics::ArcCollector;
 use crate::tunnel::Tunnel;
 
 fn main() {
@@ -48,6 +53,22 @@ async fn run(options: &GlobalOptions) -> EmptyResult {
     let config = Config::load(config_path).map_err(|e| format!(
         "Error while reading {:?} configuration file: {}", config_path, e))?;
 
-    let tunnel = Tunnel::new(&config).await?;
-    tunnel.handle().await
+    let tunnel = Arc::new(Tunnel::new(&config).await?);
+    let mut metrics_server: Box<dyn Future<Output=_> + Unpin> = Box::new(std::future::pending());
+
+    if let Some(metrics_bind_address) = config.metrics_bind_address {
+        let mut registry = Registry::with_prefix("hiddenlink");
+        registry.register_collector(ArcCollector::new(tunnel.clone()));
+        metrics_server = Box::new(metrics::run(metrics_bind_address, registry).await?);
+    }
+
+    tokio::try_join!(
+        tunnel.handle(),
+        async move {
+            metrics_server.as_mut().await.unwrap().map_err(|e| format!(
+                "Metrics server has crashed: {e}").into())
+        },
+    )?;
+
+    Ok(())
 }

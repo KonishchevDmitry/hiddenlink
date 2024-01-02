@@ -1,7 +1,11 @@
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use bytes::BytesMut;
 use log::{trace, info};
+use prometheus_client::collector::Collector;
+use prometheus_client::encoding::{EncodeMetric, DescriptorEncoder};
+use prometheus_client::metrics::counter::ConstCounter;
 use tokio_tun::Tun;
 
 use crate::config::{Config, TransportConfig};
@@ -89,5 +93,26 @@ impl Tunnel {
                 }
             }
         }
+    }
+}
+
+// XXX(konishchev): Implement
+impl Collector for Tunnel {
+    fn encode(&self, mut encoder: DescriptorEncoder) -> std::fmt::Result {
+        let counter = ConstCounter::new(42);
+        let metric_encoder = encoder.encode_descriptor(
+            "my_counter",
+            "some help",
+            None,
+            counter.metric_type(),
+        )?;
+        counter.encode(metric_encoder)?;
+        Ok(())
+    }
+}
+
+impl Debug for Tunnel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tunnel").finish()
     }
 }

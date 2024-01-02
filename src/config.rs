@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use serde_derive::{Serialize, Deserialize};
@@ -22,6 +23,8 @@ pub struct Config {
     #[validate]
     #[validate(length(min = 1))]
     pub transports: Vec<TransportSpec>,
+
+    pub metrics_bind_address: Option<SocketAddr>,
 }
 
 impl Config {

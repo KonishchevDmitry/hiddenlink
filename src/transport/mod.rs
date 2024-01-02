@@ -9,7 +9,7 @@ pub mod http;
 pub mod udp;
 
 #[async_trait]
-pub trait Transport {
+pub trait Transport: Send + Sync {
     fn name(&self) -> &str;
     fn is_ready(&self) -> bool;
     async fn send(&self, packet: &[u8]) -> EmptyResult;
