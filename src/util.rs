@@ -33,43 +33,43 @@ pub fn meter_tcp_socket(encoder: &mut DescriptorEncoder, name: &str, fd: RawFd) 
 
 			metrics::collect_metric(
 				encoder, "socket_state", "Current socket state",
-				&state_labels, ConstGauge::new(1))?;
+				&state_labels, &ConstGauge::new(1))?;
 
 			metrics::collect_metric(
 				encoder, "socket_receive_window", "Local advertised receive window",
-				&labels, ConstGauge::<i64>::new(info.tcpi_rcv_wnd.into()))?;
+				&labels, &ConstGauge::<i64>::new(info.tcpi_rcv_wnd.into()))?;
 
 			metrics::collect_metric(
 				encoder, "socket_send_window", "Peer's advertised receive window",
-				&labels, ConstGauge::<i64>::new(info.tcpi_snd_wnd.into()))?;
+				&labels, &ConstGauge::<i64>::new(info.tcpi_snd_wnd.into()))?;
 
 			metrics::collect_metric(
 				encoder, "socket_congestion_send_window", "Congestion window for sending",
-				&labels, ConstGauge::<i64>::new(info.tcpi_snd_cwnd.into()))?;
+				&labels, &ConstGauge::<i64>::new(info.tcpi_snd_cwnd.into()))?;
 
 			metrics::collect_metric(
 				encoder, "socket_reordered_packets", "Reordered packets",
-				&labels, ConstCounter::<u64>::new(info.tcpi_reord_seen.into()))?;
+				&labels, &ConstCounter::<u64>::new(info.tcpi_reord_seen.into()))?;
 
 			metrics::collect_metric(
 				encoder, "socket_retransmits", "Total number of retransmissions",
-				&labels, ConstCounter::<u64>::new(info.tcpi_total_retrans.into()))?;
+				&labels, &ConstCounter::<u64>::new(info.tcpi_total_retrans.into()))?;
 
 			metrics::collect_metric(
 				encoder, "socket_not_sent_bytes", "Bytes we don't try to sent yet",
-				&labels, ConstGauge::<i64>::new(info.tcpi_notsent_bytes.into()))?;
+				&labels, &ConstGauge::<i64>::new(info.tcpi_notsent_bytes.into()))?;
 
 			metrics::collect_metric(
 				encoder, "socket_busy_time", "Time actively sending data (non-empty write queue)",
-				&labels, metrics::usecs_to_counter(info.tcpi_busy_time - info.tcpi_rwnd_limited - info.tcpi_sndbuf_limited))?;
+				&labels, &metrics::usecs_to_counter(info.tcpi_busy_time - info.tcpi_rwnd_limited - info.tcpi_sndbuf_limited))?;
 
 			metrics::collect_metric(
 				encoder, "socket_stalled_by_receive_window_time", "Time stalled due to insufficient receive window",
-				&labels, metrics::usecs_to_counter(info.tcpi_rwnd_limited))?;
+				&labels, &metrics::usecs_to_counter(info.tcpi_rwnd_limited))?;
 
 			metrics::collect_metric(
 				encoder, "socket_stalled_by_insufficient_send_buffer_time", "Time stalled due to insufficient send buffer",
-				&labels, metrics::usecs_to_counter(info.tcpi_sndbuf_limited))?;
+				&labels, &metrics::usecs_to_counter(info.tcpi_sndbuf_limited))?;
 		},
 		Err(err) => {
 			error!("[{name}] Failed to get TCP socket info: {err}.");
@@ -80,7 +80,7 @@ pub fn meter_tcp_socket(encoder: &mut DescriptorEncoder, name: &str, fd: RawFd) 
 		Ok(unsent_bytes) => {
 			metrics::collect_metric(
 				encoder, "socket_unsent_bytes", "Bytes we don't sent yet or not acknowledge yet",
-				&labels, ConstGauge::<i64>::new(unsent_bytes.into()))?;
+				&labels, &ConstGauge::<i64>::new(unsent_bytes.into()))?;
 		},
 		Err(err) => {
 			error!("[{name}] Failed to get TCP unsent bytes info: {err}.");
