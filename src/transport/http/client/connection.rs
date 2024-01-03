@@ -1,12 +1,11 @@
 use std::os::fd::AsRawFd;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use log::{trace, info, warn, error};
-use prometheus_client::encoding::{CounterValueEncoder, DescriptorEncoder, EncodeMetric};
-use prometheus_client::metrics::gauge::ConstGauge;
+use prometheus_client::encoding::DescriptorEncoder;
 use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
 use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
@@ -18,9 +17,8 @@ use tokio_tun::Tun;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
-use crate::transport::http::common::{self, ConnectionFlags, PacketReader, PacketWriter, pre_configure_hiddenlink_socket,
+use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter, pre_configure_hiddenlink_socket,
     post_configure_hiddenlink_socket};
-use crate::transport::metrics::Labels;
 use crate::util;
 
 pub struct ConnectionConfig {
@@ -143,7 +141,7 @@ impl Transport for Connection {
         self.config.flags.contains(ConnectionFlags::EGRESS) && self.writer.is_ready()
     }
 
-    fn collect(&self, encoder: &mut DescriptorEncoder) {
+    fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
         self.writer.collect(encoder)
     }
 

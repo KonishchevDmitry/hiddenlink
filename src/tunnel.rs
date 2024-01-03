@@ -4,8 +4,7 @@ use std::sync::Arc;
 use bytes::BytesMut;
 use log::{trace, info};
 use prometheus_client::collector::Collector;
-use prometheus_client::encoding::{EncodeMetric, DescriptorEncoder};
-use prometheus_client::metrics::counter::ConstCounter;
+use prometheus_client::encoding::DescriptorEncoder;
 use tokio_tun::Tun;
 
 use crate::config::{Config, TransportConfig};
@@ -99,7 +98,7 @@ impl Tunnel {
 impl Collector for Tunnel {
     fn encode(&self, mut encoder: DescriptorEncoder) -> std::fmt::Result {
         for weighted in self.transports.iter() {
-            weighted.transport.collect(&mut encoder);
+            weighted.transport.collect(&mut encoder)?;
         }
         Ok(())
     }

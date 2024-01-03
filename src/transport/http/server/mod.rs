@@ -141,7 +141,8 @@ impl Transport for HttpServerTransport {
     }
 
     // FIXME(konishchev): Implement
-    fn collect(&self, _encoder: &mut DescriptorEncoder) {
+    fn collect(&self, _encoder: &mut DescriptorEncoder) -> std::fmt::Result {
+        Ok(())
     }
 
     async fn send(&self, packet: &[u8]) -> EmptyResult {

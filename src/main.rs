@@ -1,5 +1,6 @@
 #[macro_use] mod core;
 
+mod bindings;
 mod cli;
 mod config;
 mod constants;
@@ -59,7 +60,7 @@ async fn run(options: &GlobalOptions) -> EmptyResult {
     if let Some(metrics_bind_address) = config.metrics_bind_address {
         let mut registry = Registry::with_prefix("hiddenlink");
         registry.register_collector(ArcCollector::new(tunnel.clone()));
-        metrics_server = Box::new(metrics::run(metrics_bind_address, registry).await?);
+        metrics_server = Box::new(metrics::server::run(metrics_bind_address, registry).await?);
     }
 
     tokio::try_join!(

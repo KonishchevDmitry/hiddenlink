@@ -136,10 +136,11 @@ impl Transport for HttpClientTransport {
     }
 
     // FIXME(konishchev): Implement
-    fn collect(&self, encoder: &mut DescriptorEncoder) {
+    fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
         for weighted in self.connections.iter() {
-            weighted.transport.collect(encoder);
+            weighted.transport.collect(encoder)?;
         }
+        Ok(())
     }
 
     async fn send(&self, packet: &[u8]) -> EmptyResult {

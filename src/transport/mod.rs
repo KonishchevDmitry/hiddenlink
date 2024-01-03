@@ -7,14 +7,13 @@ use rand::Rng;
 use crate::core::EmptyResult;
 
 pub mod http;
-mod metrics;
 pub mod udp;
 
 #[async_trait]
 pub trait Transport: Send + Sync {
     fn name(&self) -> &str;
     fn is_ready(&self) -> bool;
-    fn collect(&self, encoder: &mut DescriptorEncoder);
+    fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result;
     async fn send(&self, packet: &[u8]) -> EmptyResult;
 }
 

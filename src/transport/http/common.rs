@@ -1,22 +1,19 @@
 use std::marker::Unpin;
 use std::os::fd::RawFd;
-use std::os::raw::{c_int, c_ulong};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bitflags::bitflags;
 use bytes::{Bytes, BytesMut, Buf};
-use nix::ioctl_read_bad;
-use prometheus_client::metrics::MetricType;
 use prometheus_client::metrics::counter::Counter;
-use prometheus_client::encoding::{CounterValueEncoder, DescriptorEncoder, EncodeMetric};
+use prometheus_client::encoding::DescriptorEncoder;
 use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::{constants, util};
+use crate::{constants, metrics, util};
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
 
@@ -142,18 +139,14 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
         self.writer.lock().unwrap().is_some()
     }
 
-    // XXX(konishchev): Implement
-    fn collect(&self, encoder: &mut DescriptorEncoder) {
-        let mut family_encoder = encoder.encode_descriptor(
-            "dropped_packets",
-            "Dropped packets count",
-            None,
-            MetricType::Counter,
-        ).unwrap();
+    fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
+        metrics::collect_dropped_packets(encoder, &self.name, &self.dropped_packets)?;
 
-        let labels = [("transport", self.name.as_str())];
-        let metric_encoder = family_encoder.encode_family(&labels).unwrap();
-        self.dropped_packets.encode(metric_encoder).unwrap();
+        if let Some(writer) = self.writer.lock().unwrap().as_ref().clone() {
+            util::meter_tcp_socket(encoder, &self.name, writer.fd)?;
+        }
+
+        Ok(())
     }
 
     async fn send(&self, packet: &[u8]) -> EmptyResult {
@@ -202,7 +195,3 @@ pub fn configure_socket_timeout(connection: &TcpStream, timeout: Duration, keep_
 
     Ok(())
 }
-
-// man 7 tcp: returns the amount of unsent data in the socket send queue.
-const SIOCOUTQ: c_ulong = 0x5411;
-ioctl_read_bad!(ioctl_siocoutq, SIOCOUTQ, c_int);

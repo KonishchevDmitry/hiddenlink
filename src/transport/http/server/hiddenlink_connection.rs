@@ -79,7 +79,8 @@ impl Transport for HiddenlinkConnection {
     }
 
     // FIXME(konishchev): Implement
-    fn collect(&self, _encoder: &mut DescriptorEncoder) {
+    fn collect(&self, _encoder: &mut DescriptorEncoder) -> std::fmt::Result {
+        Ok(())
     }
 
     // FIXME(konishchev): Implement
