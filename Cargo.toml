@@ -21,6 +21,7 @@ const_format = "0.2.32"
 easy-logging = "0.1.2"
 host-port-pair = "0.1.1"
 itertools = "0.12.0"
+libc = "0.2.151"
 log = "0.4.20"
 nix = { version = "0.27.1", features = ["ioctl"] }
 pktparse = "0.7.1"
@@ -38,6 +39,9 @@ tokio-rustls = "0.25.0"
 tokio-tun = "0.11.2"
 validator = { version = "0.16.1", features = ["derive", "unic"] }
 x509-parser = "0.15.1"
+
+[build-dependencies]
+bindgen = "0.69.1"
 
 [dev-dependencies]
 rstest = "0.18.2"
