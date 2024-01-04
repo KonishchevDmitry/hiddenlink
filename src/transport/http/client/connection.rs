@@ -37,11 +37,10 @@ pub struct Connection {
 
 impl Connection {
     pub fn new(name: String, config: Arc<ConnectionConfig>) -> Connection {
-        let writer = PacketWriter::new(&name);
         Connection {
-            name,
+            name: name.clone(),
             config,
-            writer,
+            writer: PacketWriter::new(name),
         }
     }
 

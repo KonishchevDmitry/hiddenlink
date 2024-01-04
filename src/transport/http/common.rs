@@ -108,9 +108,9 @@ struct PacketWriterConnection<C> {
 }
 
 impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
-    pub fn new(name: &str) -> PacketWriter<C> {
+    pub fn new(name: String) -> PacketWriter<C> {
         PacketWriter {
-            name: name.to_owned(),
+            name,
             writer: Mutex::default(),
             dropped_packets: Counter::default(),
         }
@@ -149,6 +149,7 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
         Ok(())
     }
 
+    // FIXME(konishchev): Check socket buffers?
     async fn send(&self, packet: &[u8]) -> EmptyResult {
         let writer = self.writer.lock().unwrap().as_ref().ok_or_else(|| {
             self.dropped_packets.inc();

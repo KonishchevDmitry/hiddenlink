@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
 
 use async_trait::async_trait;
+use itertools::Itertools;
 use log::{trace, info, error};
 use prometheus_client::encoding::DescriptorEncoder;
 use rustls::ClientConfig;
@@ -139,8 +140,15 @@ impl Transport for HttpServerTransport {
         self.connections.lock().unwrap().is_ready()
     }
 
-    // FIXME(konishchev): Implement
-    fn collect(&self, _encoder: &mut DescriptorEncoder) -> std::fmt::Result {
+    fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
+        let connections = self.connections.lock().unwrap().iter()
+            .map(|weighted| weighted.transport.clone())
+            .collect_vec();
+
+        for connection in connections {
+            connection.collect(encoder)?;
+        }
+
         Ok(())
     }
 
