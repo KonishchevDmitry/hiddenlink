@@ -142,7 +142,7 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
         metrics::collect_dropped_packets(encoder, &self.name, &self.dropped_packets)?;
 
-        if let Some(writer) = self.writer.lock().unwrap().as_ref().clone() {
+        if let Some(writer) = self.writer.lock().unwrap().clone() {
             util::meter_tcp_socket(encoder, &self.name, writer.fd)?;
         }
 

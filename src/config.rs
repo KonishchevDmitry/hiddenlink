@@ -39,9 +39,12 @@ impl Config {
 #[derive(Serialize, Deserialize, Validate)]
 // Don't use #[serde(deny_unknown_fields)] because of #[serde(flatten)]
 pub struct TransportSpec {
+    pub name: Option<String>,
+
     #[validate(range(min = 1))]
     #[serde(default="default_transport_weight")]
     pub weight: u16,
+
     #[validate]
     #[serde(flatten)]
     pub transport: TransportConfig,

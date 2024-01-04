@@ -14,6 +14,7 @@ use prometheus_client::{
 use crate::bindings::{self, tcp_info};
 use crate::metrics;
 
+// FIXME(konishchev): Read man 7 socket ip udp
 // FIXME(konishchev): Review the metrics
 pub fn meter_tcp_socket(encoder: &mut DescriptorEncoder, name: &str, fd: RawFd) -> std::fmt::Result {
 	let labels = [(metrics::TRANSPORT_LABEL, name)];
@@ -80,7 +81,7 @@ pub fn meter_tcp_socket(encoder: &mut DescriptorEncoder, name: &str, fd: RawFd) 
 		Ok(unsent_bytes) => {
 			metrics::collect_metric(
 				encoder, "socket_unsent_bytes", "Bytes we don't sent yet or not acknowledge yet",
-				&labels, &ConstGauge::<i64>::new(unsent_bytes.into()))?;
+				&labels, &ConstGauge::<i64>::new(unsent_bytes))?;
 		},
 		Err(err) => {
 			error!("[{name}] Failed to get TCP unsent bytes info: {err}.");

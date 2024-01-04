@@ -51,8 +51,7 @@ pub struct HttpServerTransport {
 
 // FIXME(konishchev): Consider to: SIOCOUTQ, TCP_INFO
 impl HttpServerTransport {
-    pub async fn new(config: &HttpServerTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
-        let name = format!("HTTP server on {}", config.bind_address);
+    pub async fn new(name: String, config: &HttpServerTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
         let secret = Arc::new(config.secret.clone());
         let domains = Arc::new(TlsDomains::new(&config.default_domain, &config.additional_domains)?);
 

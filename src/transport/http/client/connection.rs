@@ -92,10 +92,16 @@ impl Connection {
 
     async fn process_handshake(&self, connection: &mut ClientTlsStream<TcpStream>) -> EmptyResult {
         // FIXME(konishchev): Send random payload to mimic HTTP client request
-        // FIXME(konishchev): Send name?
+
+        let name = self.name.as_bytes();
+        let name_len: u8 = name.len().try_into().map_err(|_| "Transport name is too long")?;
+
         connection.write_all(self.config.secret.as_bytes()).await?;
         connection.write_u8(self.config.flags.bits()).await?;
+        connection.write_u8(name_len).await?;
+        connection.write_all(name).await?;
         post_configure_hiddenlink_socket(connection.get_ref().0)?;
+
         Ok(())
     }
 

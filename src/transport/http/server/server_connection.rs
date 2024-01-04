@@ -48,18 +48,18 @@ impl ServerConnection {
     }
 
     pub async fn handle(self, tcp_connection: TcpStream) -> Option<HiddenlinkConnection> {
-        let process_routing_decision = tokio::time::timeout(
+        let process_handshake = tokio::time::timeout(
             CONNECTION_TIMEOUT,
-            self.process_routing_decision(tcp_connection));
+            self.process_handshake(tcp_connection));
 
-        let decision = process_routing_decision.await.ok_or_handle_error(|_err: Elapsed| {
+        let decision = process_handshake.await.ok_or_handle_error(|_err: Elapsed| {
             trace!("[{}] The connection has timed out.", self.name);
         })?;
 
         let hiddenlink_connection = match decision? {
-            RoutingDecision::Hiddenlink {flags, preread_data, connection} => {
-                trace!("[{}] The client has passed hiddenlink handshake.", self.name);
-                HiddenlinkConnection::new(self.name, flags, preread_data, connection)
+            RoutingDecision::Hiddenlink {name, flags, preread_data, connection} => {
+                trace!("[{}] The client has passed hiddenlink handshake as {name:?}.", self.name);
+                HiddenlinkConnection::new(name, flags, preread_data, connection)
             },
             RoutingDecision::Proxy {preread_data, connection, upstream_domain} => {
                 self.process_request_proxying(preread_data, connection, &upstream_domain).await;
@@ -70,9 +70,9 @@ impl ServerConnection {
         Some(hiddenlink_connection)
     }
 
-    async fn process_routing_decision(&self, tcp_connection: TcpStream) -> Option<RoutingDecision> {
+    async fn process_handshake(&self, tcp_connection: TcpStream) -> Option<RoutingDecision> {
         let (tls_connection, upstream_domain) = self.process_tls_handshake(tcp_connection).await?;
-        self.process_hiddenlink_handshake(tls_connection, upstream_domain).await.ok_or_handle_error(|err| {
+        self.process_routing_decision(tls_connection, upstream_domain).await.ok_or_handle_error(|err| {
             trace!("[{}] Connection is broken: {err}.", self.name);
         })
     }
@@ -120,32 +120,24 @@ impl ServerConnection {
         self.proxy_request(invalid_request, tcp_connection, true, upstream_domain).await
     }
 
-    async fn process_hiddenlink_handshake(&self, mut connection: TlsStream<TcpStream>, upstream_domain: &str) -> GenericResult<RoutingDecision> {
+    async fn process_routing_decision(&self, mut connection: TlsStream<TcpStream>, upstream_domain: &str) -> GenericResult<RoutingDecision> {
         let secret = self.secret.as_bytes();
-        let mut buf = BytesMut::with_capacity(secret.len());
+
+        let mut buf = BytesMut::with_capacity(
+            secret.len()
+            + Self::HIDDENLINK_STATIC_HEADER_SIZE
+            + usize::from(u8::MAX) // name
+        );
 
         loop {
             let size = connection.read_buf(&mut buf).await?;
 
-            if buf.len() > secret.len() {
+            if buf.len() >= secret.len() {
                 if &buf[..secret.len()] != secret {
                     break;
                 }
-
-                let raw_flags = buf[secret.len()];
-                let flags = ConnectionFlags::from_bits(raw_flags).ok_or_else(|| format!(
-                    "Hiddenlink handshake failed: Invalid connection flags: {raw_flags:08b}"))?;
-
-                let tcp_connection = connection.get_ref().0;
-                pre_configure_hiddenlink_socket(tcp_connection)
-                    .and_then(|()| post_configure_hiddenlink_socket(tcp_connection))
-                    .map_err(|e| format!("Failed to configure hiddenlink connection: {e}"))?;
-
-                return Ok(RoutingDecision::Hiddenlink {
-                    flags,
-                    preread_data: buf.freeze().split_off(secret.len() + 1),
-                    connection,
-                })
+                return self.process_hiddenlink_handshake(connection, buf).await.map_err(|e| format!(
+                    "Hiddenlink handshake failed: {e}").into());
             } else if size == 0 || buf != secret[..buf.len()] {
                 break;
             }
@@ -157,6 +149,60 @@ impl ServerConnection {
             preread_data: buf.freeze(),
             connection,
             upstream_domain: upstream_domain.to_owned(),
+        })
+    }
+
+    const HIDDENLINK_STATIC_HEADER_SIZE: usize = 2; // flags + name len
+
+    async fn process_hiddenlink_handshake(&self, mut connection: TlsStream<TcpStream>, mut buf: BytesMut) -> GenericResult<RoutingDecision> {
+        let mut index = self.secret.len();
+
+        while buf.len() < index + Self::HIDDENLINK_STATIC_HEADER_SIZE {
+            if connection.read_buf(&mut buf).await? == 0 {
+                return Err!("Got an unexpected EOF");
+            }
+        }
+
+        let raw_flags = buf[index];
+        index += 1;
+
+        let flags = ConnectionFlags::from_bits(raw_flags).ok_or_else(|| format!(
+            "Invalid connection flags: {raw_flags:08b}"))?;
+
+        let name_len: usize = buf[index].into();
+        index += 1;
+
+        while buf.len() < index + name_len {
+            if connection.read_buf(&mut buf).await? == 0 {
+                return Err!("Got an unexpected EOF");
+            }
+        }
+
+        let raw_name = &buf[index..index + name_len];
+        index += name_len;
+
+        let name = String::from_utf8(raw_name.into())
+            .ok().and_then(|name| {
+                if name.is_empty() || name.trim() != name || !name.chars().all(|c| {
+                    c.is_ascii_alphanumeric() || c.is_ascii_punctuation() || c == ' '
+                }) {
+                    None
+                } else {
+                    Some(name)
+                }
+            })
+            .ok_or_else(|| format!("Got an invalid connection name: {:?}", String::from_utf8_lossy(raw_name)))?;
+
+        let tcp_connection = connection.get_ref().0;
+        pre_configure_hiddenlink_socket(tcp_connection)
+            .and_then(|()| post_configure_hiddenlink_socket(tcp_connection))
+            .map_err(|e| format!("Failed to configure hiddenlink connection: {e}"))?;
+
+        Ok(RoutingDecision::Hiddenlink {
+            name,
+            flags,
+            preread_data: buf.freeze().split_off(index),
+            connection,
         })
     }
 
@@ -185,6 +231,7 @@ impl ServerConnection {
 
 enum RoutingDecision {
     Hiddenlink {
+        name: String,
         flags: ConnectionFlags,
         preread_data: Bytes,
         connection: TlsStream<TcpStream>,

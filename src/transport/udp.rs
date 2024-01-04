@@ -29,12 +29,12 @@ pub struct UdpTransport {
 }
 
 impl UdpTransport {
-    pub async fn new(config: &UdpTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
+    pub async fn new(name: String, config: &UdpTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
         let socket = UdpSocket::bind(&config.bind_address).await.map_err(|e| format!(
             "Failed to bind to {}: {}", config.bind_address, e))?;
 
         let transport = Arc::new(UdpTransport {
-            name: format!("UDP transport to {}", config.peer_address),
+            name,
             peer_address: config.peer_address,
             socket,
         });

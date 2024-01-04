@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -32,25 +33,92 @@ impl Tunnel {
             .map_err(|e| format!("Unable to attach to {:?} tun device: {}", config.name, e))?
             .drain(..).next().unwrap());
 
+        let mut http_clients = 0;
+        let mut http_client_index = 0;
+
+        let mut http_servers = 0;
+        let mut http_server_index = 0;
+
+        let mut udp_transports = 0;
+        let mut udp_transport_index = 0;
+
+        for config in &config.transports {
+            match &config.transport {
+                TransportConfig::HttpClient(_) => http_clients += 1,
+                TransportConfig::HttpServer(_) => http_servers += 1,
+                TransportConfig::Udp(_) => udp_transports += 1,
+            }
+        }
+
+        let mut names = HashSet::new();
         let mut transports = WeightedTransports::new();
 
         for config in &config.transports {
             let tun = tun.clone();
-            let name = None; // FIXME(konishchev): Support
+
+            let name = config.name.clone();
+            if let Some(ref name) = name {
+                if name.is_empty() || name.trim() != name || !name.chars().all(|c| {
+                    // Note: '#' is reserved for auto-generated names
+                    c.is_ascii_alphanumeric() || c == ' '
+                }) {
+                    return Err!("Invalid transport name: {name:?}");
+                }
+            }
 
             let transport = match &config.transport {
                 TransportConfig::HttpClient(config) => {
-                    let name = name.unwrap_or_else(|| format!("HTTP client to {}", config.endpoint));
+                    http_client_index += 1;
+
+                    let name = name.unwrap_or_else(|| if http_clients > 1 {
+                        format!("HTTP client #{http_client_index}")
+                    } else {
+                        "HTTP client".to_owned()
+                    });
+
+                    if !names.insert(name.clone()) {
+                        return Err!("Duplicated transport name: {name:?}");
+                    }
+
                     HttpClientTransport::new(name, config, tun).await.map_err(|e| format!(
                         "Failed to initialize HTTP client transport: {e}"))?
                 },
 
-                TransportConfig::HttpServer(config) => HttpServerTransport::new(config, tun).await.map_err(|e| format!(
-                    "Failed to initialize HTTP server transport: {e}"))?,
+                TransportConfig::HttpServer(config) => {
+                    http_server_index += 1;
 
-                TransportConfig::Udp(config) => UdpTransport::new(config, tun).await.map_err(|e| format!(
-                    "Failed to initialize UDP transport: {e}"))?,
+                    let name = name.unwrap_or_else(|| if http_servers > 1 {
+                        format!("HTTP server #{http_server_index}")
+                    } else {
+                        "HTTP server".to_owned()
+                    });
+
+                    if !names.insert(name.clone()) {
+                        return Err!("Duplicated transport name: {name:?}");
+                    }
+
+                    HttpServerTransport::new(name, config, tun).await.map_err(|e| format!(
+                      "Failed to initialize HTTP server transport: {e}"))?
+                },
+
+                TransportConfig::Udp(config) => {
+                    udp_transport_index += 1;
+
+                    let name = name.unwrap_or_else(|| if udp_transports > 1 {
+                        format!("UDP transport #{udp_transport_index}")
+                    } else {
+                        "UDP transport".to_owned()
+                    });
+
+                    if !names.insert(name.clone()) {
+                        return Err!("Duplicated transport name: {name:?}");
+                    }
+
+                    UdpTransport::new(name, config, tun).await.map_err(|e| format!(
+                        "Failed to initialize UDP transport: {e}"))?
+                },
             };
+
             transports.add(transport, config.weight, config.weight);
         }
 

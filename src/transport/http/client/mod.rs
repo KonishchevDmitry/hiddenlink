@@ -22,7 +22,7 @@ use crate::transport::http::tls;
 #[derive(Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct HttpClientTransportConfig {
-    pub endpoint: String,
+    endpoint: String,
 
     #[validate(non_control_character)]
     #[validate(length(min = "MIN_SECRET_LEN"))]
@@ -109,7 +109,7 @@ impl HttpClientTransport {
             let weight = connections.add(connection.clone(), config.connection_min_weight, config.connection_max_weight).weight;
             if config.connections > 1 {
                 // FIXME(konishchev): Rebalance periodically
-                debug!("[{}] #{id} connection is created with weight {weight}.", name);
+                debug!("[{}] connection #{id} is created with weight {weight}.", name);
             }
 
             let tun = tun.clone();
