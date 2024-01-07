@@ -13,7 +13,6 @@ use prometheus_client::encoding::DescriptorEncoder;
 use rustls::ClientConfig;
 use serde_derive::{Serialize, Deserialize};
 use tokio::net::TcpListener;
-use tokio_tun::Tun;
 use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
@@ -22,6 +21,7 @@ use crate::transport::http::common::MIN_SECRET_LEN;
 use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
 use crate::transport::http::server::server_connection::ServerConnection;
 use crate::transport::http::tls::{self, TlsDomains, TlsDomainConfig};
+use crate::tunnel::Tunnel;
 
 #[derive(Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
@@ -50,9 +50,8 @@ pub struct HttpServerTransport {
     connections: Arc<Mutex<WeightedTransports<HiddenlinkConnection>>>,
 }
 
-// FIXME(konishchev): Consider to: SIOCOUTQ, TCP_INFO
 impl HttpServerTransport {
-    pub async fn new(name: String, config: &HttpServerTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
+    pub async fn new(name: String, config: &HttpServerTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn Transport>> {
         let secret = Arc::new(config.secret.clone());
         let domains = Arc::new(TlsDomains::new(&config.default_domain, &config.additional_domains)?);
 
@@ -83,14 +82,14 @@ impl HttpServerTransport {
         {
             let transport = transport.clone();
             tokio::spawn(async move {
-                transport.handle(listener, tun).await;
+                transport.handle(listener, tunnel).await;
             });
         }
 
         Ok(transport)
     }
 
-    async fn handle(&self, listener: TcpListener, tun: Arc<Tun>) {
+    async fn handle(&self, listener: TcpListener, tunnel: Arc<Tunnel>) {
         loop {
             // FIXME(konishchev): Add semaphore
 
@@ -112,7 +111,7 @@ impl HttpServerTransport {
                 self.upstream_address, self.upstream_client_config.clone());
 
             {
-                let tun = tun.clone();
+                let tunnel = tunnel.clone();
                 let connections = self.connections.clone();
 
                 tokio::spawn(async move {
@@ -121,7 +120,7 @@ impl HttpServerTransport {
 
                         // FIXME(konishchev): Get weight from client
                         connections.lock().unwrap().add(connection.clone(), 100, 100);
-                        connection.handle(tun).await;
+                        connection.handle(tunnel).await;
                         connections.lock().unwrap().remove(connection);
                     }
                 });

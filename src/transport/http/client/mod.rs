@@ -10,7 +10,6 @@ use prometheus_client::encoding::DescriptorEncoder;
 use rustls::ClientConfig;
 use rustls::pki_types::DnsName;
 use serde_derive::{Serialize, Deserialize};
-use tokio_tun::Tun;
 use validator::Validate;
 
 use crate::core::{GenericResult, GenericError, EmptyResult};
@@ -18,6 +17,7 @@ use crate::transport::{Transport, WeightedTransports, default_transport_weight};
 use crate::transport::http::client::connection::{Connection, ConnectionConfig};
 use crate::transport::http::common::{ConnectionFlags, MIN_SECRET_LEN};
 use crate::transport::http::tls;
+use crate::tunnel::Tunnel;
 
 #[derive(Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
@@ -63,7 +63,7 @@ pub struct HttpClientTransport {
 }
 
 impl HttpClientTransport {
-    pub async fn new(name: String, config: &HttpClientTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
+    pub async fn new(name: String, config: &HttpClientTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn Transport>> {
         let mut flags = ConnectionFlags::empty();
         flags.set(ConnectionFlags::INGRESS, config.ingress);
         flags.set(ConnectionFlags::EGRESS, config.egress);
@@ -112,9 +112,9 @@ impl HttpClientTransport {
                 debug!("[{}] connection #{id} is created with weight {weight}.", name);
             }
 
-            let tun = tun.clone();
+            let tunnel = tunnel.clone();
             tokio::spawn(async move {
-                connection.handle(tun).await;
+                connection.handle(tunnel).await;
             });
         }
 

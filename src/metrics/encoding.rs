@@ -8,16 +8,21 @@ use prometheus_client::{
 pub const TRANSPORT_LABEL: &str = "transport";
 
 pub fn collect_dropped_packets(encoder: &mut DescriptorEncoder, transport: &str, counter: &Counter) -> Result {
-    collect_metric(
+    collect_family(
         encoder, "dropped_packets", "Dropped packets count",
         &[(TRANSPORT_LABEL, transport)], counter)
 }
 
-pub fn collect_metric<M: EncodeMetric, L: EncodeLabelSet>(
+pub fn collect_family<M: EncodeMetric, L: EncodeLabelSet>(
     encoder: &mut DescriptorEncoder, name: &str, help: &str, labels: &L, metric: &M,
 ) -> Result {
     let mut family_encoder = encoder.encode_descriptor(name, help, None, metric.metric_type())?;
     let metric_encoder = family_encoder.encode_family(labels)?;
+    metric.encode(metric_encoder)
+}
+
+pub fn collect_metric<M: EncodeMetric>(encoder: &mut DescriptorEncoder, name: &str, help: &str, metric: &M) -> Result {
+    let metric_encoder = encoder.encode_descriptor(name, help, None, metric.metric_type())?;
     metric.encode(metric_encoder)
 }
 

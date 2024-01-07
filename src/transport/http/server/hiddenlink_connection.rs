@@ -9,11 +9,11 @@ use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_rustls::server::TlsStream;
-use tokio_tun::Tun;
 
 use crate::core::EmptyResult;
 use crate::transport::Transport;
 use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter};
+use crate::tunnel::Tunnel;
 use crate::util;
 
 pub struct HiddenlinkConnection {
@@ -39,7 +39,7 @@ impl HiddenlinkConnection {
         }
     }
 
-    pub async fn handle(&self, tun: Arc<Tun>) {
+    pub async fn handle(&self, tunnel: Arc<Tunnel>) {
         let mut packet_reader = self.packet_reader.lock().await;
 
         loop {
@@ -62,8 +62,8 @@ impl HiddenlinkConnection {
 
             util::trace_packet(&self.name, packet);
 
-            if let Err(err) = tun.send(packet).await {
-                error!("[{}] Failed to send packet to tun device: {err}.", self.name);
+            if let Err(err) = tunnel.send(packet).await {
+                error!("[{}] {err}.", self.name);
             }
         }
 

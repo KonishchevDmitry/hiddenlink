@@ -21,7 +21,7 @@ use crate::cli::{GlobalOptions, Parser};
 use crate::config::Config;
 use crate::core::EmptyResult;
 use crate::metrics::ArcCollector;
-use crate::tunnel::Tunnel;
+use crate::tunnel::Controller;
 
 fn main() {
     let mut parser = Parser::new();
@@ -54,17 +54,17 @@ async fn run(options: &GlobalOptions) -> EmptyResult {
     let config = Config::load(config_path).map_err(|e| format!(
         "Error while reading {:?} configuration file: {}", config_path, e))?;
 
-    let tunnel = Arc::new(Tunnel::new(&config).await?);
+    let controller = Arc::new(Controller::new(&config).await?);
     let mut metrics_server: Box<dyn Future<Output=_> + Unpin> = Box::new(std::future::pending());
 
     if let Some(metrics_bind_address) = config.metrics_bind_address {
         let mut registry = Registry::with_prefix("hiddenlink");
-        registry.register_collector(ArcCollector::new(tunnel.clone()));
+        registry.register_collector(ArcCollector::new(controller.clone()));
         metrics_server = Box::new(metrics::server::run(metrics_bind_address, registry).await?);
     }
 
     tokio::try_join!(
-        tunnel.handle(),
+        controller.handle(),
         async move {
             metrics_server.as_mut().await.unwrap().map_err(|e| format!(
                 "Metrics server has crashed: {e}").into())

@@ -1,5 +1,5 @@
 use std::io;
-use std::os::fd::RawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::os::raw::c_int;
 
 use itertools::Itertools;
@@ -14,9 +14,9 @@ use prometheus_client::{
 use crate::bindings::{self, tcp_info};
 use crate::metrics;
 
-// FIXME(konishchev): Read man 7 socket ip udp
+// FIXME(konishchev): Read man 7 udp
 // FIXME(konishchev): Review the metrics
-pub fn meter_tcp_socket(encoder: &mut DescriptorEncoder, name: &str, fd: RawFd) -> std::fmt::Result {
+pub fn meter_tcp_socket<F: AsFd>(encoder: &mut DescriptorEncoder, name: &str, fd: &F) -> std::fmt::Result {
 	let labels = [(metrics::TRANSPORT_LABEL, name)];
 
 	match get_tcp_info(fd) {
@@ -32,43 +32,43 @@ pub fn meter_tcp_socket(encoder: &mut DescriptorEncoder, name: &str, fd: RawFd) 
 
 			let state_labels = labels.iter().cloned().chain([("state", state)]).collect_vec();
 
-			metrics::collect_metric(
+			metrics::collect_family(
 				encoder, "socket_state", "Current socket state",
 				&state_labels, &ConstGauge::new(1))?;
 
-			metrics::collect_metric(
+			metrics::collect_family(
 				encoder, "socket_receive_window", "Local advertised receive window",
 				&labels, &ConstGauge::<i64>::new(info.tcpi_rcv_wnd.into()))?;
 
-			metrics::collect_metric(
+			metrics::collect_family(
 				encoder, "socket_send_window", "Peer's advertised receive window",
 				&labels, &ConstGauge::<i64>::new(info.tcpi_snd_wnd.into()))?;
 
-			metrics::collect_metric(
+			metrics::collect_family(
 				encoder, "socket_congestion_send_window", "Congestion window for sending",
 				&labels, &ConstGauge::<i64>::new(info.tcpi_snd_cwnd.into()))?;
 
-			metrics::collect_metric(
+			metrics::collect_family(
 				encoder, "socket_reordered_packets", "Reordered packets",
 				&labels, &ConstCounter::<u64>::new(info.tcpi_reord_seen.into()))?;
 
-			metrics::collect_metric(
+			metrics::collect_family(
 				encoder, "socket_retransmits", "Total number of retransmissions",
 				&labels, &ConstCounter::<u64>::new(info.tcpi_total_retrans.into()))?;
 
-			metrics::collect_metric(
+			metrics::collect_family(
 				encoder, "socket_not_sent_bytes", "Bytes we don't try to sent yet",
 				&labels, &ConstGauge::<i64>::new(info.tcpi_notsent_bytes.into()))?;
 
-			metrics::collect_metric(
+			metrics::collect_family(
 				encoder, "socket_busy_time", "Time actively sending data (non-empty write queue)",
 				&labels, &metrics::usecs_to_counter(info.tcpi_busy_time - info.tcpi_rwnd_limited - info.tcpi_sndbuf_limited))?;
 
-			metrics::collect_metric(
+			metrics::collect_family(
 				encoder, "socket_stalled_by_receive_window_time", "Time stalled due to insufficient receive window",
 				&labels, &metrics::usecs_to_counter(info.tcpi_rwnd_limited))?;
 
-			metrics::collect_metric(
+			metrics::collect_family(
 				encoder, "socket_stalled_by_insufficient_send_buffer_time", "Time stalled due to insufficient send buffer",
 				&labels, &metrics::usecs_to_counter(info.tcpi_sndbuf_limited))?;
 		},
@@ -79,7 +79,7 @@ pub fn meter_tcp_socket(encoder: &mut DescriptorEncoder, name: &str, fd: RawFd) 
 
 	match get_tcp_unsent_bytes(fd) {
 		Ok(unsent_bytes) => {
-			metrics::collect_metric(
+			metrics::collect_family(
 				encoder, "socket_unsent_bytes", "Bytes we don't sent yet or not acknowledge yet",
 				&labels, &ConstGauge::<i64>::new(unsent_bytes))?;
 		},
@@ -88,18 +88,40 @@ pub fn meter_tcp_socket(encoder: &mut DescriptorEncoder, name: &str, fd: RawFd) 
 		},
 	}
 
+	match nix::sys::socket::getsockopt(fd, nix::sys::socket::sockopt::RcvBuf) {
+		Ok(size) => {
+			metrics::collect_family(
+				encoder, "socket_receive_buffer_size", "Size of socket's receive buffer",
+				&labels, &ConstGauge::<i64>::new(size as i64))?;
+		},
+		Err(err) => {
+			error!("[{name}] Failed to get receive buffer size: {err}.");
+		},
+	}
+
+	match nix::sys::socket::getsockopt(fd, nix::sys::socket::sockopt::SndBuf) {
+		Ok(size) => {
+			metrics::collect_family(
+				encoder, "socket_send_buffer_size", "Size of socket's send buffer",
+				&labels, &ConstGauge::<i64>::new(size as i64))?;
+		},
+		Err(err) => {
+			error!("[{name}] Failed to get send buffer size: {err}.");
+		},
+	}
+
     Ok(())
 }
 
 // See `man 7 tcp` for details
-fn get_tcp_info(fd: RawFd) -> io::Result<tcp_info> {
+fn get_tcp_info<F: AsFd>(fd: &F) -> io::Result<tcp_info> {
 	let mut info = tcp_info::default();
 
 	let expected_size = std::mem::size_of_val(&info) as libc::socklen_t;
 	let mut size = expected_size;
 
 	if unsafe {
-		libc::getsockopt(fd, libc::IPPROTO_TCP, libc::TCP_INFO, (&mut info as *mut tcp_info).cast(), &mut size)
+		libc::getsockopt(fd.as_fd().as_raw_fd(), libc::IPPROTO_TCP, libc::TCP_INFO, (&mut info as *mut tcp_info).cast(), &mut size)
 	} == -1 {
 		return Err(io::Error::last_os_error());
 	}
@@ -111,10 +133,10 @@ fn get_tcp_info(fd: RawFd) -> io::Result<tcp_info> {
 	Ok(info)
 }
 
-fn get_tcp_unsent_bytes(fd: RawFd) -> io::Result<i64> {
+fn get_tcp_unsent_bytes<F: AsFd>(fd: &F) -> io::Result<i64> {
 	let mut unsent_bytes: c_int = 0;
 	unsafe {
-		ioctl_siocoutq(fd, &mut unsent_bytes)?;
+		ioctl_siocoutq(fd.as_fd().as_raw_fd(), &mut unsent_bytes)?;
 	}
 	Ok(unsent_bytes.into())
 }

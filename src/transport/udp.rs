@@ -7,12 +7,12 @@ use log::{info, error};
 use prometheus_client::encoding::DescriptorEncoder;
 use serde_derive::{Serialize, Deserialize};
 use tokio::net::UdpSocket;
-use tokio_tun::Tun;
 use validator::Validate;
 
 use crate::constants;
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
+use crate::tunnel::Tunnel;
 use crate::util;
 
 #[derive(Serialize, Deserialize, Validate)]
@@ -29,7 +29,7 @@ pub struct UdpTransport {
 }
 
 impl UdpTransport {
-    pub async fn new(name: String, config: &UdpTransportConfig, tun: Arc<Tun>) -> GenericResult<Arc<dyn Transport>> {
+    pub async fn new(name: String, config: &UdpTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn Transport>> {
         let socket = UdpSocket::bind(&config.bind_address).await.map_err(|e| format!(
             "Failed to bind to {}: {}", config.bind_address, e))?;
 
@@ -44,14 +44,14 @@ impl UdpTransport {
         {
             let transport = transport.clone();
             tokio::spawn(async move {
-                transport.handle(tun).await
+                transport.handle(tunnel).await
             });
         }
 
         Ok(transport)
     }
 
-    async fn handle(&self, tun: Arc<Tun>) {
+    async fn handle(&self, tunnel: Arc<Tunnel>) {
         let mut buf = BytesMut::zeroed(constants::MTU - constants::IPV4_HEADER_SIZE - constants::UDP_HEADER_SIZE);
 
         loop {
@@ -73,8 +73,8 @@ impl UdpTransport {
             let packet = &buf[..size];
             util::trace_packet(&self.name, packet);
 
-            if let Err(err) = tun.send(packet).await {
-                error!("[{}] Failed to send packet to tun device: {}.", self.name, err);
+            if let Err(err) = tunnel.send(packet).await {
+                error!("[{}] {}.", self.name, err);
             }
         }
     }

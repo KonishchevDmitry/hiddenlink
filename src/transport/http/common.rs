@@ -1,5 +1,5 @@
 use std::marker::Unpin;
-use std::os::fd::RawFd;
+use std::os::fd::{RawFd, BorrowedFd};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -102,11 +102,6 @@ pub struct PacketWriter<C: AsyncWriteExt + Send + Sync + Unpin> {
     dropped_packets: Counter,
 }
 
-struct PacketWriterConnection<C> {
-    fd: RawFd,
-    connection: AsyncMutex<C>,
-}
-
 impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
     pub fn new(name: String) -> PacketWriter<C> {
         PacketWriter {
@@ -143,7 +138,7 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
         metrics::collect_dropped_packets(encoder, &self.name, &self.dropped_packets)?;
 
         if let Some(writer) = self.writer.lock().unwrap().clone() {
-            util::meter_tcp_socket(encoder, &self.name, writer.fd)?;
+            util::meter_tcp_socket(encoder, &self.name, &writer.fd())?;
         }
 
         Ok(())
@@ -163,6 +158,19 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
 
         // FIXME(konishchev): ioctl_siocoutq: 84 -> 106
         Ok(())
+    }
+}
+
+struct PacketWriterConnection<C> {
+    fd: RawFd,
+    connection: AsyncMutex<C>,
+}
+
+impl<C> PacketWriterConnection<C> {
+    fn fd(&self) -> BorrowedFd {
+        unsafe {
+            BorrowedFd::borrow_raw(self.fd)
+        }
     }
 }
 

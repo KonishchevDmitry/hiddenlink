@@ -13,12 +13,12 @@ use tokio::net::TcpStream;
 use tokio::time;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
-use tokio_tun::Tun;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::Transport;
 use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter, pre_configure_hiddenlink_socket,
     post_configure_hiddenlink_socket};
+use crate::tunnel::Tunnel;
 use crate::util;
 
 pub struct ConnectionConfig {
@@ -45,14 +45,14 @@ impl Connection {
     }
 
     // FIXME(konishchev): Connection TTL?
-    pub async fn handle(&self, tun: Arc<Tun>) {
+    pub async fn handle(&self, tunnel: Arc<Tunnel>) {
         loop {
             match self.process_connect().await {
                 Ok(connection) => {
                     let fd = connection.as_raw_fd();
                     let (reader, writer) = tokio::io::split(connection);
                     self.writer.replace(fd, writer);
-                    self.process_connection(reader, tun.clone()).await;
+                    self.process_connection(reader, tunnel.clone()).await;
                 },
                 Err(err) => {
                     warn!("[{}] Failed to establish hiddenlink connection: {err}", self.name);
@@ -104,7 +104,7 @@ impl Connection {
         Ok(())
     }
 
-    async fn process_connection(&self, connection: ReadHalf<ClientTlsStream<TcpStream>>, tun: Arc<Tun>) {
+    async fn process_connection(&self, connection: ReadHalf<ClientTlsStream<TcpStream>>, tunnel: Arc<Tunnel>) {
         let mut packet_reader = PacketReader::new(Bytes::new(), connection);
 
         loop {
@@ -127,8 +127,8 @@ impl Connection {
 
             util::trace_packet(&self.name, packet);
 
-            if let Err(err) = tun.send(packet).await {
-                error!("[{}] Failed to send packet to tun device: {err}.", self.name);
+            if let Err(err) = tunnel.send(packet).await {
+                error!("[{}] {err}.", self.name);
             }
         }
 
