@@ -2,6 +2,7 @@ mod hiddenlink_connection;
 mod proxied_connection;
 mod server_connection;
 
+use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
@@ -16,7 +17,7 @@ use tokio::net::TcpListener;
 use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
-use crate::transport::{Transport, WeightedTransports};
+use crate::transport::{Transport, WeightedTransports, TransportConnectionStat};
 use crate::transport::http::common::MIN_SECRET_LEN;
 use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
 use crate::transport::http::server::server_connection::ServerConnection;
@@ -47,7 +48,7 @@ pub struct HttpServerTransport {
     upstream_address: SocketAddr,
     upstream_client_config: Arc<ClientConfig>,
 
-    connections: Arc<Mutex<WeightedTransports<HiddenlinkConnection>>>,
+    connections: Arc<Mutex<HiddenlinkConnections>>,
 }
 
 impl HttpServerTransport {
@@ -74,7 +75,7 @@ impl HttpServerTransport {
             upstream_address: config.upstream_address,
             upstream_client_config,
 
-            connections: Arc::new(Mutex::new(WeightedTransports::new())),
+            connections: Default::default(),
         });
 
         info!("[{}] Listening on {}.", transport.name, config.bind_address);
@@ -112,24 +113,32 @@ impl HttpServerTransport {
 
             {
                 let tunnel = tunnel.clone();
+                let server_name = self.name.clone();
                 let connections = self.connections.clone();
 
                 tokio::spawn(async move {
-                    if let Some(connection) = server_connection.handle(connection).await {
-                        let connection = Arc::new(connection);
+                    let Some(request) = server_connection.handle(connection).await else {
+                        return
+                    };
 
-                        // FIXME(konishchev): Get weight from client
-                        connections.lock().unwrap().add(connection.clone(), 100, 100);
-                        connection.handle(tunnel).await;
-                        connections.lock().unwrap().remove(connection);
-                    }
+                    let stat = connections.lock().unwrap().stat.entry(request.name.clone()).or_insert_with(|| {
+                        Arc::new(TransportConnectionStat::new(&server_name, &request.name))
+                    }).clone();
+
+                    let connection = Arc::new(HiddenlinkConnection::new(
+                        request.name, request.flags, request.preread_data, request.connection, stat,
+                    ));
+
+                    // FIXME(konishchev): Get weight from client
+                    connections.lock().unwrap().active.add(connection.clone(), 100, 100);
+                    connection.handle(tunnel).await;
+                    connections.lock().unwrap().active.remove(connection);
                 });
             }
         }
     }
 }
 
-// XXX(konishchev): Metrics: sent/received packets/bytes
 #[async_trait]
 impl Transport for HttpServerTransport {
     fn name(&self) -> &str {
@@ -137,13 +146,21 @@ impl Transport for HttpServerTransport {
     }
 
     fn is_ready(&self) -> bool {
-        self.connections.lock().unwrap().is_ready()
+        self.connections.lock().unwrap().active.is_ready()
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
-        let connections = self.connections.lock().unwrap().iter()
-            .map(|weighted| weighted.transport.clone())
-            .collect_vec();
+        let (connections, stats) = {
+            let connections = self.connections.lock().unwrap();
+            (
+                connections.active.iter().map(|weighted| weighted.transport.clone()).collect_vec(),
+                connections.stat.values().cloned().collect_vec(),
+            )
+        };
+
+        for stat in stats {
+            stat.collect(encoder)?;
+        }
 
         for connection in connections {
             connection.collect(encoder)?;
@@ -153,12 +170,18 @@ impl Transport for HttpServerTransport {
     }
 
     async fn send(&self, packet: &[u8]) -> EmptyResult {
-        let connection = self.connections.lock().unwrap().select().ok_or(
-            "There is no open connections")?;
+        let connection = self.connections.lock().unwrap().active.select().ok_or(
+            "There is no open connections")?; // FIXME(konishchev): Meter drop
 
         trace!("Sending the packet via {}...", connection.name());
 
         Ok(connection.send(packet).await.map_err(|e| format!(
             "{}: {e}", connection.name()))?)
     }
+}
+
+#[derive(Default)]
+struct HiddenlinkConnections {
+    active: WeightedTransports<HiddenlinkConnection>,
+    stat: HashMap<String, Arc<TransportConnectionStat>>,
 }

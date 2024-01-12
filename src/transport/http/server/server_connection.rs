@@ -16,7 +16,6 @@ use crate::core::{GenericResult, ResultTools};
 use crate::transport::http::common::{ConnectionFlags, configure_socket_timeout, pre_configure_hiddenlink_socket,
     post_configure_hiddenlink_socket};
 use crate::transport::http::server::proxied_connection::ProxiedConnection;
-use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
 use crate::transport::http::tls::TlsDomains;
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);  // Standard nginx timeout
@@ -47,7 +46,7 @@ impl ServerConnection {
         }
     }
 
-    pub async fn handle(self, tcp_connection: TcpStream) -> Option<HiddenlinkConnection> {
+    pub async fn handle(self, tcp_connection: TcpStream) -> Option<HiddenlinkConnectionRequest> {
         let process_handshake = tokio::time::timeout(
             CONNECTION_TIMEOUT,
             self.process_handshake(tcp_connection));
@@ -56,10 +55,10 @@ impl ServerConnection {
             trace!("[{}] The connection has timed out.", self.name);
         })?;
 
-        let hiddenlink_connection = match decision? {
-            RoutingDecision::Hiddenlink {name, flags, preread_data, connection} => {
-                trace!("[{}] The client has passed hiddenlink handshake as {name:?}.", self.name);
-                HiddenlinkConnection::new(name, flags, preread_data, connection)
+        let hiddenlink_connection_request = match decision? {
+            RoutingDecision::Hiddenlink(request) => {
+                trace!("[{}] The client has passed hiddenlink handshake as {:?}.", self.name, request.name);
+                request
             },
             RoutingDecision::Proxy {preread_data, connection, upstream_domain} => {
                 self.process_request_proxying(preread_data, connection, &upstream_domain).await;
@@ -67,7 +66,7 @@ impl ServerConnection {
             },
         };
 
-        Some(hiddenlink_connection)
+        Some(hiddenlink_connection_request)
     }
 
     async fn process_handshake(&self, tcp_connection: TcpStream) -> Option<RoutingDecision> {
@@ -198,12 +197,12 @@ impl ServerConnection {
             .and_then(|()| post_configure_hiddenlink_socket(tcp_connection))
             .map_err(|e| format!("Failed to configure hiddenlink connection: {e}"))?;
 
-        Ok(RoutingDecision::Hiddenlink {
+        Ok(RoutingDecision::Hiddenlink(HiddenlinkConnectionRequest {
             name,
             flags,
             preread_data: buf.freeze().split_off(index),
             connection,
-        })
+        }))
     }
 
     async fn process_request_proxying(&self, preread_data: Bytes, connection: TlsStream<TcpStream>, upstream_domain: &str) {
@@ -230,15 +229,17 @@ impl ServerConnection {
 }
 
 enum RoutingDecision {
-    Hiddenlink {
-        name: String,
-        flags: ConnectionFlags,
-        preread_data: Bytes,
-        connection: TlsStream<TcpStream>,
-    },
+    Hiddenlink(HiddenlinkConnectionRequest),
     Proxy {
         preread_data: Bytes,
         connection: TlsStream<TcpStream>,
         upstream_domain: String,
     },
+}
+
+pub struct HiddenlinkConnectionRequest {
+    pub name: String,
+    pub flags: ConnectionFlags,
+    pub preread_data: Bytes,
+    pub connection: TlsStream<TcpStream>,
 }

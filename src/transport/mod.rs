@@ -88,6 +88,12 @@ impl<T: Transport + ?Sized> WeightedTransports<T> {
     }
 }
 
+impl<T: Transport + ?Sized> Default for WeightedTransports<T> {
+    fn default() -> Self {
+        WeightedTransports::new()
+    }
+}
+
 pub struct WeightedTransport<T: Transport + ?Sized> {
     pub transport: Arc<T>,
     pub weight: TransportWeight,
@@ -98,6 +104,9 @@ pub fn default_transport_weight() -> u16 {
 }
 
 pub struct TransportConnectionStat {
+    transport_name: String,
+    connection_name: String,
+
     received_packets: Counter,
     received_data: Counter,
 
@@ -108,8 +117,11 @@ pub struct TransportConnectionStat {
 }
 
 impl TransportConnectionStat {
-    pub fn new() -> TransportConnectionStat {
+    pub fn new(transport_name: &str, connection_name: &str) -> TransportConnectionStat {
         TransportConnectionStat {
+            transport_name: transport_name.to_owned(),
+            connection_name: connection_name.to_owned(),
+
             received_packets: Counter::default(),
             received_data: Counter::default(),
 
@@ -134,9 +146,11 @@ impl TransportConnectionStat {
         self.dropped_packets.inc();
     }
 
-    pub fn collect(&self, name: &str, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
-        // XXX(konishchev): + transport
-        let labels = [(metrics::CONNECTION_LABEL, name)];
+    pub fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
+        let labels = [
+            (metrics::TRANSPORT_LABEL, self.transport_name.as_str()),
+            (metrics::CONNECTION_LABEL, self.connection_name.as_str()),
+        ];
 
         metrics::collect_family(
             encoder, "connection_received_packets", "Total received packets",

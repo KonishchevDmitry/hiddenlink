@@ -13,7 +13,7 @@ use serde_derive::{Serialize, Deserialize};
 use validator::Validate;
 
 use crate::core::{GenericResult, GenericError, EmptyResult};
-use crate::transport::{Transport, WeightedTransports, default_transport_weight};
+use crate::transport::{Transport, WeightedTransports, TransportConnectionStat, default_transport_weight};
 use crate::transport::http::client::connection::{Connection, ConnectionConfig};
 use crate::transport::http::common::{ConnectionFlags, MIN_SECRET_LEN};
 use crate::transport::http::tls;
@@ -104,7 +104,8 @@ impl HttpClientTransport {
                 name.clone()
             };
 
-            let connection = Arc::new(Connection::new(connection_name, connection_config.clone()));
+            let stat = Arc::new(TransportConnectionStat::new(&name, &connection_name));
+            let connection = Arc::new(Connection::new(connection_name, connection_config.clone(), stat));
 
             let weight = connections.add(connection.clone(), config.connection_min_weight, config.connection_max_weight).weight;
             if config.connections > 1 {

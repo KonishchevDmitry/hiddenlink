@@ -37,9 +37,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new(name: String, config: Arc<ConnectionConfig>) -> Connection {
-        let stat = Arc::new(TransportConnectionStat::new());
-
+    pub fn new(name: String, config: Arc<ConnectionConfig>, stat: Arc<TransportConnectionStat>) -> Connection {
         Connection {
             name: name.clone(),
             config,
@@ -139,7 +137,6 @@ impl Connection {
     }
 }
 
-// XXX(konishchev): Metrics: sent/received packets/bytes
 #[async_trait]
 impl Transport for Connection {
     fn name(&self) -> &str {
@@ -151,7 +148,7 @@ impl Transport for Connection {
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
-        self.stat.collect(&self.name, encoder)?;
+        self.stat.collect(encoder)?;
         self.writer.collect(encoder)
     }
 

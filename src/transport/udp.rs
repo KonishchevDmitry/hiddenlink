@@ -34,11 +34,13 @@ impl UdpTransport {
         let socket = UdpSocket::bind(&config.bind_address).await.map_err(|e| format!(
             "Failed to bind to {}: {}", config.bind_address, e))?;
 
+        let stat = TransportConnectionStat::new(&name, &name);
+
         let transport = Arc::new(UdpTransport {
             name,
             peer_address: config.peer_address,
             socket,
-            stat: TransportConnectionStat::new(),
+            stat,
         });
 
         info!("[{}] Listening on {}.", transport.name, config.bind_address);
@@ -83,7 +85,6 @@ impl UdpTransport {
     }
 }
 
-// XXX(konishchev): Metrics: sent/received packets/bytes
 #[async_trait]
 impl Transport for UdpTransport {
     fn name(&self) -> &str {
@@ -94,14 +95,16 @@ impl Transport for UdpTransport {
         true
     }
 
-    // FIXME(konishchev): Implement
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
-        self.stat.collect(&self.name, encoder)
+        self.stat.collect(encoder)
     }
 
     async fn send(&self, buf: &[u8]) -> EmptyResult {
-        // XXX(konishchev): On packet drop
-        self.socket.send_to(buf, self.peer_address).await?;
+        self.socket.send_to(buf, self.peer_address).await.map_err(|e| {
+            self.stat.on_packet_dropped();
+            e
+        })?;
+
         self.stat.on_packet_sent(buf);
         Ok(())
     }

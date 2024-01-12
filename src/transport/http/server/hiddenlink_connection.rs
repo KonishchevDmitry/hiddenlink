@@ -21,13 +21,13 @@ pub struct HiddenlinkConnection {
     flags: ConnectionFlags,
     writer: PacketWriter<WriteHalf<TlsStream<TcpStream>>>,
     packet_reader: AsyncMutex<PacketReader<ReadHalf<TlsStream<TcpStream>>>>,
-    stat: Arc<TransportConnectionStat>,
 }
 
 impl HiddenlinkConnection {
-    pub fn new(name: String, flags: ConnectionFlags, preread_data: Bytes, connection: TlsStream<TcpStream>) -> HiddenlinkConnection {
-        let stat = Arc::new(TransportConnectionStat::new());
-
+    pub fn new(
+        name: String, flags: ConnectionFlags, preread_data: Bytes, connection: TlsStream<TcpStream>,
+        stat: Arc<TransportConnectionStat>,
+    ) -> HiddenlinkConnection {
         let fd = connection.as_raw_fd();
         let (read_half, write_half) = tokio::io::split(connection);
 
@@ -38,8 +38,7 @@ impl HiddenlinkConnection {
             name,
             flags,
             writer,
-            packet_reader: AsyncMutex::new(PacketReader::new(preread_data, read_half, stat.clone())),
-            stat,
+            packet_reader: AsyncMutex::new(PacketReader::new(preread_data, read_half, stat)),
         }
     }
 
@@ -74,7 +73,6 @@ impl HiddenlinkConnection {
     }
 }
 
-// XXX(konishchev): Metrics: sent/received packets/bytes
 #[async_trait]
 impl Transport for HiddenlinkConnection {
     fn name(&self) -> &str {
@@ -86,7 +84,7 @@ impl Transport for HiddenlinkConnection {
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
-        self.stat.collect(&self.name, encoder)?;
+        // Connection stat is collected by the server and preserved between reconnects
         self.writer.collect(encoder)
     }
 
