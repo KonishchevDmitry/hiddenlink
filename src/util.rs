@@ -15,9 +15,9 @@ use crate::bindings::{self, tcp_info};
 use crate::metrics;
 
 // FIXME(konishchev): Read man 7 udp
-// FIXME(konishchev): Review the metrics
 pub fn meter_tcp_socket<F: AsFd>(encoder: &mut DescriptorEncoder, name: &str, fd: &F) -> std::fmt::Result {
-	let labels = [(metrics::TRANSPORT_LABEL, name)];
+	// XXX(konishchev): + transport
+	let labels = [(metrics::CONNECTION_LABEL, name)];
 
 	match get_tcp_info(fd) {
 		Ok(info) => {
@@ -37,40 +37,45 @@ pub fn meter_tcp_socket<F: AsFd>(encoder: &mut DescriptorEncoder, name: &str, fd
 				&state_labels, &ConstGauge::new(1))?;
 
 			// FIXME(konishchev): Not available yet
-			// metrics::collect_family(
-			// 	encoder, "socket_receive_window", "Local advertised receive window",
-			// 	&labels, &ConstGauge::<i64>::new(info.tcpi_rcv_wnd.into()))?;
+			metrics::collect_family(
+				encoder, "socket_receive_window_bytes", "Local advertised receive window",
+				&labels, &ConstGauge::<i64>::new(info.tcpi_rcv_wnd.into()))?;
 
 			metrics::collect_family(
-				encoder, "socket_send_window", "Peer's advertised receive window",
+				encoder, "socket_send_window_bytes", "Peer's advertised receive window",
 				&labels, &ConstGauge::<i64>::new(info.tcpi_snd_wnd.into()))?;
 
 			metrics::collect_family(
-				encoder, "socket_congestion_send_window", "Congestion window for sending",
-				&labels, &ConstGauge::<i64>::new(info.tcpi_snd_cwnd.into()))?;
-
-			metrics::collect_family(
-				encoder, "socket_reordered_packets", "Reordered packets",
+				encoder, "socket_reordered_packets", "Count of received reordered packets",
 				&labels, &ConstCounter::<u64>::new(info.tcpi_reord_seen.into()))?;
 
 			metrics::collect_family(
-				encoder, "socket_retransmits", "Total number of retransmissions",
+				encoder, "socket_retransmits", "The number of segments we've retransmitted",
 				&labels, &ConstCounter::<u64>::new(info.tcpi_total_retrans.into()))?;
 
+			metrics::collect_family(
+				encoder, "socket_send_congestion_window", "Congestion window for sending",
+				&labels, &ConstGauge::<i64>::new(info.tcpi_snd_cwnd.into()))?;
+
+			// XXX(konishchev): HERE
 			metrics::collect_family(
 				encoder, "socket_not_sent_bytes", "Bytes we don't try to sent yet",
 				&labels, &ConstGauge::<i64>::new(info.tcpi_notsent_bytes.into()))?;
 
-			metrics::collect_family(
-				encoder, "socket_busy_time", "Time actively sending data (non-empty write queue)",
-				&labels, &metrics::usecs_to_counter(info.tcpi_busy_time - info.tcpi_rwnd_limited - info.tcpi_sndbuf_limited))?;
+			// For some reason tcpi_busy_time includes other metrics, so restore the actual value here
+			// (see https://github.com/torvalds/linux/commit/efd90174167530c67a54273fd5d8369c87f9bd32)
+			let busy_time = info.tcpi_busy_time - info.tcpi_rwnd_limited - info.tcpi_sndbuf_limited;
 
 			metrics::collect_family(
-				encoder, "socket_stalled_by_receive_window_time", "Time stalled due to insufficient receive window",
+				encoder, "socket_busy_seconds", "Time during which send queue was not empty and we were actively sending the data",
+				&labels, &metrics::usecs_to_counter(busy_time))?;
+
+			metrics::collect_family(
+				encoder, "socket_stalled_by_receive_window_seconds", "Time during which sending was stalled due to insufficient receive window",
 				&labels, &metrics::usecs_to_counter(info.tcpi_rwnd_limited))?;
 
 			metrics::collect_family(
-				encoder, "socket_stalled_by_insufficient_send_buffer_time", "Time stalled due to insufficient send buffer",
+				encoder, "socket_stalled_by_insufficient_send_buffer_seconds", "Time during which sending was stalled due to insufficient send buffer",
 				&labels, &metrics::usecs_to_counter(info.tcpi_sndbuf_limited))?;
 		},
 		Err(err) => {
@@ -80,6 +85,7 @@ pub fn meter_tcp_socket<F: AsFd>(encoder: &mut DescriptorEncoder, name: &str, fd
 
 	match get_tcp_unsent_bytes(fd) {
 		Ok(unsent_bytes) => {
+			// XXX(konishchev): HERE
 			metrics::collect_family(
 				encoder, "socket_unsent_bytes", "Bytes we don't sent yet or not acknowledge yet",
 				&labels, &ConstGauge::<i64>::new(unsent_bytes))?;
@@ -92,7 +98,7 @@ pub fn meter_tcp_socket<F: AsFd>(encoder: &mut DescriptorEncoder, name: &str, fd
 	match nix::sys::socket::getsockopt(fd, nix::sys::socket::sockopt::RcvBuf) {
 		Ok(size) => {
 			metrics::collect_family(
-				encoder, "socket_receive_buffer_size", "Size of socket's receive buffer",
+				encoder, "socket_receive_buffer_bytes", "Size of socket's receive buffer",
 				&labels, &ConstGauge::<i64>::new(size as i64))?;
 		},
 		Err(err) => {
@@ -103,7 +109,7 @@ pub fn meter_tcp_socket<F: AsFd>(encoder: &mut DescriptorEncoder, name: &str, fd
 	match nix::sys::socket::getsockopt(fd, nix::sys::socket::sockopt::SndBuf) {
 		Ok(size) => {
 			metrics::collect_family(
-				encoder, "socket_send_buffer_size", "Size of socket's send buffer",
+				encoder, "socket_send_buffer_bytes", "Size of socket's send buffer",
 				&labels, &ConstGauge::<i64>::new(size as i64))?;
 		},
 		Err(err) => {
@@ -183,5 +189,7 @@ pub fn format_packet(data: &[u8]) -> String {
     format!("{:02x}", data.iter().format(" "))
 }
 
+// SIOCOUTQ and SIOCOUTQNSD are both ioctl() commands used in TCP sockets. SIOCOUTQ returns the sum of both the unsent and unacked data in a TCP socket’s send queue, while SIOCOUTQNSD only returns the amount of unsent data in the socket send queue 1.
+// XXX(konishchev): SIOCINQ
 // `man 7 tcp`: returns the amount of unsent data in the socket send queue.
 ioctl_read_bad!(ioctl_siocoutq, bindings::SIOCOUTQ, c_int);

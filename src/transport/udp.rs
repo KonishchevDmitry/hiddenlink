@@ -11,7 +11,7 @@ use validator::Validate;
 
 use crate::constants;
 use crate::core::{GenericResult, EmptyResult};
-use crate::transport::Transport;
+use crate::transport::{Transport, TransportConnectionStat};
 use crate::tunnel::Tunnel;
 use crate::util;
 
@@ -26,6 +26,7 @@ pub struct UdpTransport {
     name: String,
     socket: UdpSocket,
     peer_address: SocketAddr,
+    stat: TransportConnectionStat,
 }
 
 impl UdpTransport {
@@ -37,6 +38,7 @@ impl UdpTransport {
             name,
             peer_address: config.peer_address,
             socket,
+            stat: TransportConnectionStat::new(),
         });
 
         info!("[{}] Listening on {}.", transport.name, config.bind_address);
@@ -71,6 +73,7 @@ impl UdpTransport {
             };
 
             let packet = &buf[..size];
+            self.stat.on_packet_received(packet);
             util::trace_packet(&self.name, packet);
 
             if let Err(err) = tunnel.send(packet).await {
@@ -80,6 +83,7 @@ impl UdpTransport {
     }
 }
 
+// XXX(konishchev): Metrics: sent/received packets/bytes
 #[async_trait]
 impl Transport for UdpTransport {
     fn name(&self) -> &str {
@@ -91,12 +95,14 @@ impl Transport for UdpTransport {
     }
 
     // FIXME(konishchev): Implement
-    fn collect(&self, _encoder: &mut DescriptorEncoder) -> std::fmt::Result {
-        Ok(())
+    fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
+        self.stat.collect(&self.name, encoder)
     }
 
     async fn send(&self, buf: &[u8]) -> EmptyResult {
+        // XXX(konishchev): On packet drop
         self.socket.send_to(buf, self.peer_address).await?;
+        self.stat.on_packet_sent(buf);
         Ok(())
     }
 }

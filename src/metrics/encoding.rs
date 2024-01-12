@@ -1,17 +1,12 @@
 use std::fmt::Result;
 
 use prometheus_client::{
-    metrics::counter::{Counter, ConstCounter},
+    metrics::counter::ConstCounter,
     encoding::{DescriptorEncoder, EncodeLabelSet, EncodeMetric},
 };
 
 pub const TRANSPORT_LABEL: &str = "transport";
-
-pub fn collect_dropped_packets(encoder: &mut DescriptorEncoder, transport: &str, counter: &Counter) -> Result {
-    collect_family(
-        encoder, "dropped_packets", "Dropped packets count",
-        &[(TRANSPORT_LABEL, transport)], counter)
-}
+pub const CONNECTION_LABEL: &str = "connection";
 
 pub fn collect_family<M: EncodeMetric, L: EncodeLabelSet>(
     encoder: &mut DescriptorEncoder, name: &str, help: &str, labels: &L, metric: &M,

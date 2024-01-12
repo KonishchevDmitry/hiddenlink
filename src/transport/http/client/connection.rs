@@ -15,7 +15,7 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
 
 use crate::core::{GenericResult, EmptyResult};
-use crate::transport::Transport;
+use crate::transport::{Transport, TransportConnectionStat};
 use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter, pre_configure_hiddenlink_socket,
     post_configure_hiddenlink_socket};
 use crate::tunnel::Tunnel;
@@ -33,14 +33,18 @@ pub struct Connection {
     name: String,
     config: Arc<ConnectionConfig>,
     writer: PacketWriter<WriteHalf<ClientTlsStream<TcpStream>>>,
+    stat: Arc<TransportConnectionStat>,
 }
 
 impl Connection {
     pub fn new(name: String, config: Arc<ConnectionConfig>) -> Connection {
+        let stat = Arc::new(TransportConnectionStat::new());
+
         Connection {
             name: name.clone(),
             config,
-            writer: PacketWriter::new(name),
+            writer: PacketWriter::new(name, stat.clone()),
+            stat,
         }
     }
 
@@ -105,7 +109,7 @@ impl Connection {
     }
 
     async fn process_connection(&self, connection: ReadHalf<ClientTlsStream<TcpStream>>, tunnel: Arc<Tunnel>) {
-        let mut packet_reader = PacketReader::new(Bytes::new(), connection);
+        let mut packet_reader = PacketReader::new(Bytes::new(), connection, self.stat.clone());
 
         loop {
             let packet = match packet_reader.read().await {
@@ -120,12 +124,11 @@ impl Connection {
                 }
             };
 
+            util::trace_packet(&self.name, packet);
             if !self.config.flags.contains(ConnectionFlags::INGRESS) {
                 error!("[{}] Got a packet from non-ingress connection.", self.name);
                 continue;
             }
-
-            util::trace_packet(&self.name, packet);
 
             if let Err(err) = tunnel.send(packet).await {
                 error!("[{}] {err}.", self.name);
@@ -136,6 +139,7 @@ impl Connection {
     }
 }
 
+// XXX(konishchev): Metrics: sent/received packets/bytes
 #[async_trait]
 impl Transport for Connection {
     fn name(&self) -> &str {
@@ -147,6 +151,7 @@ impl Transport for Connection {
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
+        self.stat.collect(&self.name, encoder)?;
         self.writer.collect(encoder)
     }
 

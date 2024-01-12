@@ -129,6 +129,7 @@ impl HttpServerTransport {
     }
 }
 
+// XXX(konishchev): Metrics: sent/received packets/bytes
 #[async_trait]
 impl Transport for HttpServerTransport {
     fn name(&self) -> &str {

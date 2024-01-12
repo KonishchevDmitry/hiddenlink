@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use prometheus_client::metrics::counter::Counter;
 use prometheus_client::encoding::DescriptorEncoder;
 use rand::Rng;
 
 use crate::core::EmptyResult;
+use crate::metrics;
 
 pub mod http;
 pub mod udp;
@@ -93,4 +95,69 @@ pub struct WeightedTransport<T: Transport + ?Sized> {
 
 pub fn default_transport_weight() -> u16 {
     100
+}
+
+pub struct TransportConnectionStat {
+    received_packets: Counter,
+    received_data: Counter,
+
+    sent_packets: Counter,
+    sent_data: Counter,
+
+    dropped_packets: Counter,
+}
+
+impl TransportConnectionStat {
+    pub fn new() -> TransportConnectionStat {
+        TransportConnectionStat {
+            received_packets: Counter::default(),
+            received_data: Counter::default(),
+
+            sent_packets: Counter::default(),
+            sent_data: Counter::default(),
+
+            dropped_packets: Counter::default(),
+        }
+    }
+
+    pub fn on_packet_received(&self, packet: &[u8]) {
+        self.received_packets.inc();
+        self.received_data.inc_by(packet.len().try_into().unwrap());
+    }
+
+    pub fn on_packet_sent(&self, packet: &[u8]) {
+        self.sent_packets.inc();
+        self.sent_data.inc_by(packet.len().try_into().unwrap());
+    }
+
+    pub fn on_packet_dropped(&self) {
+        self.dropped_packets.inc();
+    }
+
+    pub fn collect(&self, name: &str, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
+        // XXX(konishchev): + transport
+        let labels = [(metrics::CONNECTION_LABEL, name)];
+
+        metrics::collect_family(
+            encoder, "connection_received_packets", "Total received packets",
+            &labels, &self.received_packets)?;
+
+        metrics::collect_family(
+            encoder, "connection_received_bytes", "Total received data",
+            &labels, &self.received_data)?;
+
+        metrics::collect_family(
+            encoder, "connection_sent_packets", "Total sent packets",
+            &labels, &self.sent_packets)?;
+
+        metrics::collect_family(
+            encoder, "connection_sent_bytes", "Total sent data",
+            &labels, &self.sent_data)?;
+
+        metrics::collect_family(
+            encoder, "connection_dropped_packets", "Total dropped packets",
+            &labels, &self.dropped_packets)?;
+
+        Ok(())
+    }
 }

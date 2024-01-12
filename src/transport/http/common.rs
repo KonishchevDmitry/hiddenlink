@@ -6,16 +6,15 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bitflags::bitflags;
 use bytes::{Bytes, BytesMut, Buf};
-use prometheus_client::metrics::counter::Counter;
 use prometheus_client::encoding::DescriptorEncoder;
 use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::{constants, metrics, util};
+use crate::{constants, util};
 use crate::core::{GenericResult, EmptyResult};
-use crate::transport::Transport;
+use crate::transport::{Transport, TransportConnectionStat};
 
 pub const MIN_SECRET_LEN: usize = 10;
 
@@ -31,6 +30,7 @@ pub struct PacketReader<C: AsyncReadExt + Unpin> {
     buf: BytesMut,
     connection: C,
     state: PacketReaderState,
+    stat: Arc<TransportConnectionStat>,
 }
 
 enum PacketReaderState {
@@ -39,7 +39,7 @@ enum PacketReaderState {
 }
 
 impl<C: AsyncReadExt + Unpin> PacketReader<C> {
-    pub fn new(preread_data: Bytes, connection: C) -> PacketReader<C> {
+    pub fn new(preread_data: Bytes, connection: C, stat: Arc<TransportConnectionStat>) -> PacketReader<C> {
         let mut buf = BytesMut::new(); // FIXME(konishchev): Set initial capacity
         buf.extend(&preread_data);
 
@@ -47,6 +47,7 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
             buf,
             connection,
             state: PacketReaderState::ReadSize{to_drop: 0},
+            stat,
         }
     }
 
@@ -76,8 +77,10 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
             }
 
             if is_packet {
+                let packet = &self.buf[..data_size];
+                self.stat.on_packet_received(packet);
                 self.state = PacketReaderState::ReadSize{to_drop: data_size};
-                return Ok(Some(&self.buf[..data_size]));
+                return Ok(Some(packet));
             }
 
             let version = self.buf[0] >> 4;
@@ -99,15 +102,15 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
 pub struct PacketWriter<C: AsyncWriteExt + Send + Sync + Unpin> {
     name: String,
     writer: Mutex<Option<Arc<PacketWriterConnection<C>>>>,
-    dropped_packets: Counter,
+    stat: Arc<TransportConnectionStat>,
 }
 
 impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
-    pub fn new(name: String) -> PacketWriter<C> {
+    pub fn new(name: String, stat: Arc<TransportConnectionStat>) -> PacketWriter<C> {
         PacketWriter {
             name,
             writer: Mutex::default(),
-            dropped_packets: Counter::default(),
+            stat,
         }
     }
 
@@ -124,7 +127,8 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
     }
  }
 
- #[async_trait]
+// XXX(konishchev): Metrics: sent/received packets/bytes
+#[async_trait]
  impl<C: AsyncWriteExt + Send + Sync + Unpin> Transport for PacketWriter<C> {
     fn name(&self) ->  &str {
         &self.name
@@ -135,27 +139,25 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
-        metrics::collect_dropped_packets(encoder, &self.name, &self.dropped_packets)?;
-
         if let Some(writer) = self.writer.lock().unwrap().clone() {
             util::meter_tcp_socket(encoder, &self.name, &writer.fd())?;
         }
-
         Ok(())
     }
 
     // FIXME(konishchev): Check socket buffers?
     async fn send(&self, packet: &[u8]) -> EmptyResult {
         let writer = self.writer.lock().unwrap().as_ref().ok_or_else(|| {
-            self.dropped_packets.inc();
+            self.stat.on_packet_dropped();
             "Connection is closed"
         })?.clone();
 
         writer.connection.lock().await.write_all(packet).await.map_err(|e| {
-            self.dropped_packets.inc();
+            self.stat.on_packet_dropped();
             e
         })?;
 
+        self.stat.on_packet_sent(packet);
         // FIXME(konishchev): ioctl_siocoutq: 84 -> 106
         Ok(())
     }
