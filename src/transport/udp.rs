@@ -96,7 +96,8 @@ impl Transport for UdpTransport {
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
-        self.stat.collect(encoder)
+        self.stat.collect(encoder)?;
+        self.stat.collect_udp_socket(encoder, &self.socket)
     }
 
     async fn send(&self, buf: &[u8]) -> EmptyResult {

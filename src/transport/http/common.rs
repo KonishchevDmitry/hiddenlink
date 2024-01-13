@@ -127,7 +127,6 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
     }
  }
 
-// XXX(konishchev): Metrics: sent/received packets/bytes
 #[async_trait]
  impl<C: AsyncWriteExt + Send + Sync + Unpin> Transport for PacketWriter<C> {
     fn name(&self) ->  &str {
@@ -140,7 +139,7 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
         if let Some(writer) = self.writer.lock().unwrap().clone() {
-            util::meter_tcp_socket(encoder, &self.name, &writer.fd())?;
+            self.stat.collect_tcp_socket(encoder, &writer.fd())?;
         }
         Ok(())
     }

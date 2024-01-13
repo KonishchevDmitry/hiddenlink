@@ -126,7 +126,6 @@ impl HttpClientTransport {
     }
 }
 
-// XXX(konishchev): Metrics: sent/received packets/bytes
 #[async_trait]
 impl Transport for HttpClientTransport {
     fn name(&self) -> &str {
@@ -137,7 +136,6 @@ impl Transport for HttpClientTransport {
         self.connections.is_ready()
     }
 
-    // FIXME(konishchev): Implement
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
         for weighted in self.connections.iter() {
             weighted.transport.collect(encoder)?;
@@ -147,7 +145,7 @@ impl Transport for HttpClientTransport {
 
     async fn send(&self, packet: &[u8]) -> EmptyResult {
         let connection = self.connections.select().ok_or(
-            "There is no open connections")?;
+            "There is no open connections")?; // FIXME(konishchev): Dropped packets metric
 
         if self.connections.len() > 1 {
             trace!("Sending the packet via {}...", connection.name());

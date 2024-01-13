@@ -31,6 +31,7 @@ fn main() {
         process::exit(1);
     });
 
+    // FIXME(konishchev): Errors metric
     if let Err(e) = easy_logging::init(module_path!().split("::").next().unwrap(), global.log_level) {
         let _ = writeln!(io::stderr(), "Failed to initialize the logging: {}.", e);
         process::exit(1);
