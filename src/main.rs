@@ -4,6 +4,7 @@ mod bindings;
 mod cli;
 mod config;
 mod constants;
+mod controller;
 mod metrics;
 mod transport;
 mod tunnel;
@@ -19,9 +20,9 @@ use prometheus_client::registry::Registry;
 
 use crate::cli::{GlobalOptions, Parser};
 use crate::config::Config;
+use crate::controller::Controller;
 use crate::core::EmptyResult;
 use crate::metrics::ArcCollector;
-use crate::tunnel::Controller;
 
 fn main() {
     let mut parser = Parser::new();
