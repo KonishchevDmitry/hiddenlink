@@ -15,8 +15,8 @@ use std::io::{self, Write};
 use std::process;
 use std::sync::Arc;
 
-use log::error;
-use prometheus_client::registry::Registry;
+use log::{LevelFilter, error};
+use prometheus_client::{metrics::counter::Counter, registry::Registry};
 
 use crate::cli::{GlobalOptions, Parser};
 use crate::config::Config;
@@ -32,8 +32,18 @@ fn main() {
         process::exit(1);
     });
 
-    // FIXME(konishchev): Errors metric
-    if let Err(e) = easy_logging::init(module_path!().split("::").next().unwrap(), global.log_level) {
+    let error_counter = Counter::default();
+
+    let log_error_counter = error_counter.clone();
+    let dispatch = easy_logging::builder(module_path!().split("::").next().unwrap(), global.log_level).chain(
+        easy_logging::fern::Dispatch::new()
+            .level(LevelFilter::Error)
+            .chain(easy_logging::fern::Output::call(move |_| {
+                log_error_counter.inc();
+            }))
+    );
+
+    if let Err(e) = dispatch.apply() {
         let _ = writeln!(io::stderr(), "Failed to initialize the logging: {}.", e);
         process::exit(1);
     }
@@ -44,14 +54,14 @@ fn main() {
         std::process::abort();
     }));
 
-    if let Err(e) = run(&global) {
+    if let Err(e) = run(&global, error_counter) {
         error!("{}.", e);
         process::exit(1);
     }
 }
 
 #[tokio::main]
-async fn run(options: &GlobalOptions) -> EmptyResult {
+async fn run(options: &GlobalOptions, error_counter: Counter) -> EmptyResult {
     let config_path = &options.config_path;
     let config = Config::load(config_path).map_err(|e| format!(
         "Error while reading {:?} configuration file: {}", config_path, e))?;
@@ -61,7 +71,10 @@ async fn run(options: &GlobalOptions) -> EmptyResult {
 
     if let Some(metrics_bind_address) = config.metrics_bind_address {
         let mut registry = Registry::with_prefix("hiddenlink");
+
+        registry.register("errors", "Error count", error_counter);
         registry.register_collector(ArcCollector::new(controller.clone()));
+
         metrics_server = Box::new(metrics::server::run(metrics_bind_address, registry).await?);
     }
 
