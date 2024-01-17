@@ -17,7 +17,8 @@ use tokio::net::TcpListener;
 use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
-use crate::transport::{Transport, WeightedTransports, TransportConnectionStat};
+use crate::metrics::{self, TransportLabels};
+use crate::transport::{Transport, MeteredTransport, WeightedTransports, TransportConnectionStat};
 use crate::transport::http::common::MIN_SECRET_LEN;
 use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
 use crate::transport::http::server::server_connection::ServerConnection;
@@ -41,6 +42,7 @@ pub struct HttpServerTransportConfig {
 
 pub struct HttpServerTransport {
     name: String,
+    labels: TransportLabels,
 
     secret: Arc<String>,
     domains: Arc<TlsDomains>,
@@ -52,7 +54,8 @@ pub struct HttpServerTransport {
 }
 
 impl HttpServerTransport {
-    pub async fn new(name: String, config: &HttpServerTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn Transport>> {
+    pub async fn new(name: String, config: &HttpServerTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn MeteredTransport>> {
+        let labels = metrics::transport_labels(&name);
         let secret = Arc::new(config.secret.clone());
         let domains = Arc::new(TlsDomains::new(&config.default_domain, &config.additional_domains)?);
 
@@ -68,6 +71,7 @@ impl HttpServerTransport {
 
         let transport = Arc::new(HttpServerTransport{
             name,
+            labels,
 
             secret,
             domains,
@@ -171,12 +175,18 @@ impl Transport for HttpServerTransport {
 
     async fn send(&self, packet: &[u8]) -> EmptyResult {
         let connection = self.connections.lock().unwrap().active.select().ok_or(
-            "There is no open connections")?; // FIXME(konishchev): Meter drop
+            "There is no open connections")?;
 
         trace!("Sending the packet via {}...", connection.name());
 
         Ok(connection.send(packet).await.map_err(|e| format!(
             "{}: {e}", connection.name()))?)
+    }
+}
+
+impl MeteredTransport for HttpServerTransport {
+    fn labels(&self) -> &TransportLabels {
+        &self.labels
     }
 }
 

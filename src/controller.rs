@@ -7,25 +7,29 @@ use bytes::BytesMut;
 use log::{trace, info};
 use prometheus_client::{
     collector::Collector,
+    metrics::counter::Counter,
     metrics::family::Family,
-    metrics::histogram::{Histogram, exponential_buckets},
+    metrics::histogram::Histogram,
     encoding::DescriptorEncoder,
 };
 use tokio_tun::Tun;
 
 use crate::config::{Config, TransportConfig};
 use crate::core::{GenericResult, EmptyResult};
-use crate::metrics;
-use crate::transport::{Transport, WeightedTransports};
+use crate::metrics::{self, TransportLabels};
+use crate::transport::{MeteredTransport, WeightedTransports};
 use crate::transport::http::{HttpClientTransport, HttpServerTransport};
 use crate::transport::udp::UdpTransport;
 use crate::tunnel::Tunnel;
 use crate::util;
 
+const BLACKHOLE_TRANSPORT: &str = "Blackhole";
+
 pub struct Controller {
     tunnel: Arc<Tunnel>,
-    transports: WeightedTransports<dyn Transport>,
-    transport_send_times: Family<[(&'static str, String); 1], Histogram>,
+    transports: WeightedTransports<dyn MeteredTransport>,
+    transport_drops: Family<TransportLabels, Counter>,
+    transport_send_times: Family<TransportLabels, Histogram>,
 }
 
 impl Controller {
@@ -66,7 +70,7 @@ impl Controller {
 
             let name = config.name.clone();
             if let Some(ref name) = name {
-                if name.is_empty() || name.trim() != name || !name.chars().all(|c| {
+                if name.is_empty() || name.trim() != name || name == BLACKHOLE_TRANSPORT || !name.chars().all(|c| {
                     // Note: '#' is reserved for auto-generated names
                     c.is_ascii_alphanumeric() || c == ' '
                 }) {
@@ -133,13 +137,16 @@ impl Controller {
         Ok(Controller {
             tunnel,
             transports,
-            // FIXME(konishchev): Alter buckets
-            transport_send_times: Family::new_with_constructor(|| Histogram::new(exponential_buckets(0.00001, 5.0, 10))),
+            transport_drops: Family::default(),
+            transport_send_times: Family::new_with_constructor(metrics::send_time_histogram),
         })
     }
 
     pub async fn handle(&self) -> EmptyResult {
         info!("Ready and listening to packets.");
+
+        let blackhole_labels = metrics::transport_labels(BLACKHOLE_TRANSPORT);
+        let _ = self.transport_drops.get_or_create(&blackhole_labels);
 
         let mut buf = BytesMut::zeroed(self.tunnel.mtu()?);
 
@@ -150,9 +157,9 @@ impl Controller {
             let packet = &buf[..size];
             util::trace_packet("tun device", packet);
 
-            // FIXME(konishchev): Add metric
             let Some(transport) = self.transports.select() else {
                 trace!("Dropping the packet: there are no active transports.");
+                self.transport_drops.get_or_create(&blackhole_labels).inc();
                 continue;
             };
 
@@ -163,18 +170,18 @@ impl Controller {
             let send_time = send_start_time.elapsed();
 
             match result {
-                Ok(_) => {
-                    trace!("The packet sent.")
-                },
-                Err(err) => {
-                    // FIXME(konishchev): Add metric
-                    trace!("Failed to send the packet via {}: {}.", transport.name(), err);
+                Ok(_) => trace!("The packet sent."),
+                Err(ref err) => trace!("Failed to send the packet via {}: {err}.", transport.name()),
+            };
+
+            {
+                let drops = self.transport_drops.get_or_create(transport.labels());
+                if result.is_err() {
+                    drops.inc();
                 }
             }
 
-            // FIXME(konishchev): Eliminate to_owned()?
-            let labels = [(metrics::TRANSPORT_LABEL, transport.name().to_owned())];
-            self.transport_send_times.get_or_create(&labels).observe(send_time.as_secs_f64());
+            self.transport_send_times.get_or_create(transport.labels()).observe(send_time.as_secs_f64());
         }
     }
 }
@@ -186,6 +193,10 @@ impl Collector for Controller {
         for weighted in self.transports.iter() {
             weighted.transport.collect(&mut encoder)?;
         }
+
+        metrics::collect_metric(
+            &mut encoder, "transport_packet_drops", "Packet drops by transports",
+            &self.transport_drops)?;
 
         metrics::collect_metric(
             &mut encoder, "transport_packet_send_time", "Packet send time via transports",

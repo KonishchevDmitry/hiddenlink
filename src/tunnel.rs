@@ -1,7 +1,8 @@
 use std::time::Instant;
 
 use prometheus_client::{
-    metrics::histogram::{Histogram, exponential_buckets},
+    metrics::counter::Counter,
+    metrics::histogram::Histogram,
     encoding::DescriptorEncoder,
 };
 use tokio_tun::Tun;
@@ -11,7 +12,7 @@ use crate::metrics;
 
 pub struct Tunnel {
     tun: Tun,
-    recv_times: Histogram,
+    recv_time: Counter<f64>,
     send_times: Histogram,
 }
 
@@ -19,9 +20,8 @@ impl Tunnel {
     pub fn new(tun: Tun) -> Tunnel {
         Tunnel {
             tun,
-            // FIXME(konishchev): Alter buckets
-            recv_times: Histogram::new(exponential_buckets(0.00001, 5.0, 10)),
-            send_times: Histogram::new(exponential_buckets(0.00001, 5.0, 10)),
+            recv_time: Counter::default(),
+            send_times: metrics::send_time_histogram(),
         }
     }
 
@@ -36,21 +36,25 @@ impl Tunnel {
     pub async fn recv(&self, buf: &mut [u8]) -> GenericResult<usize> {
         let start_time = Instant::now();
         let result = self.tun.recv(buf).await;
-        self.recv_times.observe(start_time.elapsed().as_secs_f64());
+        let recv_time = start_time.elapsed();
+
+        self.recv_time.inc_by(recv_time.as_secs_f64());
         Ok(result.map_err(|e| format!("Failed to read from tun device: {e}"))?)
     }
 
     pub async fn send(&self, buf: &[u8]) -> GenericResult<usize> {
         let start_time = Instant::now();
         let result = self.tun.send(buf).await;
-        self.send_times.observe(start_time.elapsed().as_secs_f64());
+        let send_time = start_time.elapsed();
+
+        self.send_times.observe(send_time.as_secs_f64());
         Ok(result.map_err(|e| format!("Failed to send packet to tun device: {e}"))?)
     }
 
     pub fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
         metrics::collect_metric(
-            encoder, "tunnel_packet_receive_time", "Packet receive time from tunnel",
-            &self.recv_times)?;
+            encoder, "tunnel_packet_receive_time", "Packet receive time from tunnel (idle time)",
+            &self.recv_time)?;
 
         metrics::collect_metric(
             encoder, "tunnel_packet_send_time", "Packet send time to tunnel",

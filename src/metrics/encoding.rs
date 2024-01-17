@@ -1,12 +1,23 @@
 use std::fmt::Result;
 
 use prometheus_client::{
-    metrics::counter::ConstCounter,
     encoding::{DescriptorEncoder, EncodeLabelSet, EncodeMetric},
+    metrics::counter::ConstCounter,
+    metrics::histogram::{Histogram, exponential_buckets},
 };
 
 pub const TRANSPORT_LABEL: &str = "transport";
 pub const CONNECTION_LABEL: &str = "connection";
+
+pub type TransportLabels = [(&'static str, String); 1];
+
+pub fn transport_labels(name: &str) -> TransportLabels {
+    [(TRANSPORT_LABEL, name.to_owned())]
+}
+
+pub fn send_time_histogram() -> Histogram {
+    Histogram::new(exponential_buckets(0.00001, 5.0, 10))
+}
 
 pub fn collect_family<M: EncodeMetric, L: EncodeLabelSet>(
     encoder: &mut DescriptorEncoder, name: &str, help: &str, labels: &L, metric: &M,

@@ -13,7 +13,8 @@ use serde_derive::{Serialize, Deserialize};
 use validator::Validate;
 
 use crate::core::{GenericResult, GenericError, EmptyResult};
-use crate::transport::{Transport, WeightedTransports, TransportConnectionStat, default_transport_weight};
+use crate::metrics::{TransportLabels, self};
+use crate::transport::{Transport, MeteredTransport, WeightedTransports, TransportConnectionStat, default_transport_weight};
 use crate::transport::http::client::connection::{Connection, ConnectionConfig};
 use crate::transport::http::common::{ConnectionFlags, MIN_SECRET_LEN};
 use crate::transport::http::tls;
@@ -59,11 +60,14 @@ impl HttpClientTransportConfig {
 
 pub struct HttpClientTransport {
     name: String,
+    labels: TransportLabels,
     connections: WeightedTransports<Connection>,
 }
 
 impl HttpClientTransport {
-    pub async fn new(name: String, config: &HttpClientTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn Transport>> {
+    pub async fn new(name: String, config: &HttpClientTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn MeteredTransport>> {
+        let labels = metrics::transport_labels(&name);
+
         let mut flags = ConnectionFlags::empty();
         flags.set(ConnectionFlags::INGRESS, config.ingress);
         flags.set(ConnectionFlags::EGRESS, config.egress);
@@ -121,6 +125,7 @@ impl HttpClientTransport {
 
         Ok(Arc::new(HttpClientTransport{
             name,
+            labels,
             connections,
         }))
     }
@@ -145,7 +150,7 @@ impl Transport for HttpClientTransport {
 
     async fn send(&self, packet: &[u8]) -> EmptyResult {
         let connection = self.connections.select().ok_or(
-            "There is no open connections")?; // FIXME(konishchev): Dropped packets metric
+            "There is no open connections")?;
 
         if self.connections.len() > 1 {
             trace!("Sending the packet via {}...", connection.name());
@@ -158,5 +163,11 @@ impl Transport for HttpClientTransport {
                 e.to_string()
             }
         })?)
+    }
+}
+
+impl MeteredTransport for HttpClientTransport {
+    fn labels(&self) -> &TransportLabels {
+        &self.labels
     }
 }

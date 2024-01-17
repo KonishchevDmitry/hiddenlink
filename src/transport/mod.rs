@@ -13,7 +13,7 @@ use rand::Rng;
 
 use crate::bindings;
 use crate::core::EmptyResult;
-use crate::metrics;
+use crate::metrics::{self, TransportLabels};
 use crate::util;
 
 pub mod http;
@@ -25,6 +25,10 @@ pub trait Transport: Send + Sync {
     fn is_ready(&self) -> bool;
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result;
     async fn send(&self, packet: &[u8]) -> EmptyResult;
+}
+
+pub trait MeteredTransport: Transport {
+    fn labels(&self) -> &TransportLabels;
 }
 
 pub type TransportWeight = u16;

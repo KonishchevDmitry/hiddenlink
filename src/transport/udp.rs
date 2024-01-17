@@ -11,7 +11,8 @@ use validator::Validate;
 
 use crate::constants;
 use crate::core::{GenericResult, EmptyResult};
-use crate::transport::{Transport, TransportConnectionStat};
+use crate::metrics::{self, TransportLabels};
+use crate::transport::{Transport, MeteredTransport, TransportConnectionStat};
 use crate::tunnel::Tunnel;
 use crate::util;
 
@@ -24,20 +25,23 @@ pub struct UdpTransportConfig {
 
 pub struct UdpTransport {
     name: String,
+    labels: TransportLabels,
     socket: UdpSocket,
     peer_address: SocketAddr,
     stat: TransportConnectionStat,
 }
 
 impl UdpTransport {
-    pub async fn new(name: String, config: &UdpTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn Transport>> {
+    pub async fn new(name: String, config: &UdpTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn MeteredTransport>> {
         let socket = UdpSocket::bind(&config.bind_address).await.map_err(|e| format!(
             "Failed to bind to {}: {}", config.bind_address, e))?;
 
+        let labels = metrics::transport_labels(&name);
         let stat = TransportConnectionStat::new(&name, &name);
 
         let transport = Arc::new(UdpTransport {
             name,
+            labels,
             peer_address: config.peer_address,
             socket,
             stat,
@@ -108,5 +112,11 @@ impl Transport for UdpTransport {
 
         self.stat.on_packet_sent(buf);
         Ok(())
+    }
+}
+
+impl MeteredTransport for UdpTransport {
+    fn labels(&self) -> &TransportLabels {
+        &self.labels
     }
 }
