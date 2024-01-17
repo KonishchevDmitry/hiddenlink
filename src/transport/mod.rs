@@ -204,9 +204,9 @@ impl TransportConnectionStat {
                     &state_labels, &ConstGauge::new(1))?;
 
                 // FIXME(konishchev): Not available yet
-                metrics::collect_family(
-                    encoder, "socket_receive_window_bytes", "Local advertised receive window",
-                    &self.labels, &ConstGauge::<i64>::new(info.tcpi_rcv_wnd.into()))?;
+                // metrics::collect_family(
+                //     encoder, "socket_receive_window_bytes", "Local advertised receive window",
+                //     &self.labels, &ConstGauge::<i64>::new(info.tcpi_rcv_wnd.into()))?;
 
                 metrics::collect_family(
                     encoder, "socket_send_window_bytes", "Peer's advertised receive window",
