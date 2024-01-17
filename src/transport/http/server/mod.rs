@@ -10,10 +10,13 @@ use std::net::SocketAddr;
 use async_trait::async_trait;
 use itertools::Itertools;
 use log::{trace, info, error};
+use nix::sys::resource::Resource;
 use prometheus_client::encoding::DescriptorEncoder;
+use prometheus_client::metrics::gauge::Gauge;
 use rustls::ClientConfig;
 use serde_derive::{Serialize, Deserialize};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
@@ -50,6 +53,9 @@ pub struct HttpServerTransport {
     upstream_address: SocketAddr,
     upstream_client_config: Arc<ClientConfig>,
 
+    proxied_connections_count: Arc<Gauge>,
+    proxied_connections_semaphore: Arc<Semaphore>,
+
     connections: Arc<Mutex<HiddenlinkConnections>>,
 }
 
@@ -66,6 +72,14 @@ impl HttpServerTransport {
             .with_root_certificates(roots)
             .with_no_client_auth());
 
+        let (max_open_files, _hard_limit) = nix::sys::resource::getrlimit(Resource::RLIMIT_NOFILE).map_err(|e| format!(
+            "Failed to obtain max open files limit: {e}"))?;
+
+        let max_proxied_connections = std::cmp::min(
+            (max_open_files / 2).try_into().unwrap(),
+            Semaphore::MAX_PERMITS
+        );
+
         let listener = TcpListener::bind(config.bind_address).await.map_err(|e| format!(
             "Failed to bind to {}: {}", config.bind_address, e))?;
 
@@ -79,10 +93,14 @@ impl HttpServerTransport {
             upstream_address: config.upstream_address,
             upstream_client_config,
 
+            proxied_connections_count: Arc::new(Gauge::default()),
+            proxied_connections_semaphore: Arc::new(Semaphore::new(max_proxied_connections)),
+
             connections: Default::default(),
         });
 
-        info!("[{}] Listening on {}.", transport.name, config.bind_address);
+        info!("[{}] Listening on {} with {} proxied connections limit.",
+            transport.name, config.bind_address, max_proxied_connections);
 
         {
             let transport = transport.clone();
@@ -96,7 +114,7 @@ impl HttpServerTransport {
 
     async fn handle(&self, listener: TcpListener, tunnel: Arc<Tunnel>) {
         loop {
-            // FIXME(konishchev): Add semaphore
+            let proxied_connection_permit = self.proxied_connections_semaphore.clone().acquire_owned().await.unwrap();
 
             let (connection, peer_addr) = match listener.accept().await {
                 Ok(result) => result,
@@ -111,34 +129,40 @@ impl HttpServerTransport {
             };
 
             trace!("[{}] Connection accepted from {}.", self.name, peer_addr);
+
+            let tunnel = tunnel.clone();
+            let server_name = self.name.clone();
+            let connections = self.connections.clone();
+            let proxied_connections = self.proxied_connections_count.clone();
+
             let server_connection = ServerConnection::new(
                 peer_addr, self.secret.clone(), self.domains.clone(),
                 self.upstream_address, self.upstream_client_config.clone());
 
-            {
-                let tunnel = tunnel.clone();
-                let server_name = self.name.clone();
-                let connections = self.connections.clone();
+            proxied_connections.inc();
+            tokio::spawn(async move {
+                let result = server_connection.handle(connection).await;
 
-                tokio::spawn(async move {
-                    let Some(request) = server_connection.handle(connection).await else {
-                        return
-                    };
+                proxied_connections.dec();
+                drop(proxied_connection_permit);
 
-                    let stat = connections.lock().unwrap().stat.entry(request.name.clone()).or_insert_with(|| {
-                        Arc::new(TransportConnectionStat::new(&server_name, &request.name))
-                    }).clone();
+                let Some(request) = result else {
+                    return
+                };
 
-                    let connection = Arc::new(HiddenlinkConnection::new(
-                        request.name, request.flags, request.preread_data, request.connection, stat,
-                    ));
+                let stat = connections.lock().unwrap().stat.entry(request.name.clone()).or_insert_with(|| {
+                    Arc::new(TransportConnectionStat::new(&server_name, &request.name))
+                }).clone();
 
-                    // FIXME(konishchev): Get weight from client
-                    connections.lock().unwrap().active.add(connection.clone(), 100, 100);
-                    connection.handle(tunnel).await;
-                    connections.lock().unwrap().active.remove(connection);
-                });
-            }
+                let connection = Arc::new(HiddenlinkConnection::new(
+                    request.name, request.flags, request.preread_data, request.connection, stat,
+                ));
+
+                // FIXME(konishchev): Get weight from client
+                connections.lock().unwrap().active.add(connection.clone(), 100, 100);
+                connection.handle(tunnel).await;
+                connections.lock().unwrap().active.remove(connection);
+            });
         }
     }
 }
@@ -154,6 +178,10 @@ impl Transport for HttpServerTransport {
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
+        metrics::collect_metric(
+            encoder, "open_proxied_connections", "The number of currently open proxied connections",
+            self.proxied_connections_count.as_ref())?;
+
         let (connections, stats) = {
             let connections = self.connections.lock().unwrap();
             (
