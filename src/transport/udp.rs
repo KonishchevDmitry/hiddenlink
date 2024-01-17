@@ -60,14 +60,18 @@ impl UdpTransport {
     }
 
     async fn handle(&self, tunnel: Arc<Tunnel>) {
-        let mut buf = BytesMut::zeroed(constants::MTU - constants::IPV4_HEADER_SIZE - constants::UDP_HEADER_SIZE);
+        let max_size = constants::MTU - constants::IPV4_HEADER_SIZE - constants::UDP_HEADER_SIZE;
+        let mut buf = BytesMut::zeroed(max_size + 1);
 
         loop {
-            // FIXME(konishchev): Check truncate flag
             let size = match self.socket.recv_from(&mut buf).await {
                 Ok((size, _)) => {
                     if size == 0 {
                         error!("[{}] Got an empty message from the peer.", self.name);
+                        continue;
+                    } else if size > max_size {
+                        // tokio doesn't support MSG_TRUNC yet, so handle it manually
+                        error!("[{}] Got a too big message from the peer. Drop it.", self.name);
                         continue;
                     }
                     size
