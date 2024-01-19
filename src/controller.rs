@@ -33,8 +33,6 @@ pub struct Controller {
 }
 
 impl Controller {
-    // FIXME(konishchev): Configure MTU in networkd
-    // FIXME(konishchev): Configure MSS in firewall
     pub async fn new(config: &Config) -> GenericResult<Controller> {
         info!("Attaching to {} tun device...", config.name);
 
