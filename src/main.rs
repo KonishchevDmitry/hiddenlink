@@ -12,22 +12,20 @@ mod util;
 
 use std::future::Future;
 use std::io::{self, Write};
+use std::path::Path;
 use std::process;
 use std::sync::Arc;
 
 use log::{LevelFilter, error};
 use prometheus_client::{metrics::counter::Counter, registry::Registry};
 
-use crate::cli::{GlobalOptions, Parser};
 use crate::config::Config;
 use crate::controller::Controller;
 use crate::core::EmptyResult;
 use crate::metrics::ArcCollector;
 
 fn main() {
-    let mut parser = Parser::new();
-
-    let global = parser.parse_global().unwrap_or_else(|e| {
+    let args = cli::parse_args().unwrap_or_else(|e| {
         let _ = writeln!(io::stderr(), "{}.", e);
         process::exit(1);
     });
@@ -35,7 +33,7 @@ fn main() {
     let error_counter = Counter::default();
 
     let log_error_counter = error_counter.clone();
-    let dispatch = easy_logging::builder(module_path!().split("::").next().unwrap(), global.log_level).chain(
+    let dispatch = easy_logging::builder(module_path!().split("::").next().unwrap(), args.log_level).chain(
         easy_logging::fern::Dispatch::new()
             .level(LevelFilter::Error)
             .chain(easy_logging::fern::Output::call(move |_| {
@@ -54,15 +52,14 @@ fn main() {
         std::process::abort();
     }));
 
-    if let Err(e) = run(&global, error_counter) {
+    if let Err(e) = run(&args.config_path, error_counter) {
         error!("{}.", e);
         process::exit(1);
     }
 }
 
 #[tokio::main]
-async fn run(options: &GlobalOptions, error_counter: Counter) -> EmptyResult {
-    let config_path = &options.config_path;
+async fn run(config_path: &Path, error_counter: Counter) -> EmptyResult {
     let config = Config::load(config_path).map_err(|e| format!(
         "Error while reading {:?} configuration file: {}", config_path, e))?;
 
