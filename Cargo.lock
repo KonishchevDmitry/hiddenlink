@@ -87,9 +87,9 @@ dependencies = [
 
 [[package]]
 name = "anstream"
-version = "0.6.5"
+version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d664a92ecae85fd0a7392615844904654d1d5f5514837f471ddef4a057aba1b6"
+checksum = "6e2e1ebcb11de5c03c67de28a7df593d32191b44939c482e97702baaaa6ab6a5"
 dependencies = [
  "anstyle",
  "anstyle-parse",
@@ -1245,6 +1245,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
 
 [[package]]
+name = "lru_time_cache"
+version = "0.11.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9106e1d747ffd48e6be5bb2d97fa706ed25b144fbee4d5c02eae110cd8d6badd"
+
+[[package]]
 name = "matchit"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2026,6 +2032,7 @@ version = "1.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f24d99bb979b3f559f5ff560e2e7347b5d531ccf72a2bcdaeadb8007ea96989d"
 dependencies = [
+ "aes",
  "async-trait",
  "base64",
  "blake3",
@@ -2035,9 +2042,11 @@ dependencies = [
  "futures",
  "libc",
  "log",
+ "lru_time_cache",
  "once_cell",
  "percent-encoding",
  "pin-project",
+ "rand",
  "sendfd",
  "serde",
  "serde_json",
@@ -2058,7 +2067,10 @@ version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65da645ff4a6440ba1b52a9d6b4c8792054860ac135cb87f8ad3d2c7a78d41b5"
 dependencies = [
+ "aes",
  "aes-gcm",
+ "blake3",
+ "bytes",
  "cfg-if",
  "chacha20poly1305",
  "hkdf",
