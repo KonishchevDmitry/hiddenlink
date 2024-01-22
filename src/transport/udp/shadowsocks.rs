@@ -1,60 +1,79 @@
-use std::{io, net::SocketAddr, sync::Arc};
-
+// XXX(konishchev): HERE
+use std::net::SocketAddr;
 use shadowsocks::{
     config::{ServerConfig, ServerType},
     context::Context,
     crypto::CipherKind,
-    relay::{socks5::Address, udprelay::ProxySocket},
+    relay::{socks5::Address, udprelay::{ProxySocket, proxy_socket::ProxySocketResult}},
 };
 
-async fn udp_tunnel_echo(
-    server_addr: SocketAddr,
-    local_addr: SocketAddr,
-    password: &str,
-    method: CipherKind,
-) -> io::Result<()> {
-    let svr_cfg_server = ServerConfig::new(server_addr, password, method);
-    let svr_cfg_local = svr_cfg_server.clone();
+use crate::core::GenericResult;
 
-    let ctx_server = Context::new_shared(ServerType::Server);
-    let ctx_local = Context::new_shared(ServerType::Local);
-
-    let svr_cfg_server = Arc::new(svr_cfg_server);
-    let context = ctx_server;
-
-    let mut server_socket = ProxySocket::bind(context.clone(), &svr_cfg_server).await.unwrap();
-    tokio::spawn(async move {
-        let mut recv_buf = vec![0u8; 65536];
-        loop {
-            let (n, peer_addr, remote_addr, ..) = server_socket.recv_from(&mut recv_buf).await.unwrap();
-            let _ = server_socket.send_to(peer_addr, &remote_addr, &recv_buf[..n]).await;
-        }
-    });
-
-    static SEND_PAYLOAD: &[u8] = b"HELLO WORLD. \012345";
-    let svr_cfg = Arc::new(svr_cfg_local);
-    let context = ctx_local;
-    let server_socket = ProxySocket::connect(context, &svr_cfg).await?;
-    server_socket.send(&Address::SocketAddress(server_addr), SEND_PAYLOAD).await?;
-
-    let mut recv_buf = [0u8; 65536];
-    let (n, ..) = server_socket.recv(&mut recv_buf).await?;
-    assert_eq!(&recv_buf[..n], SEND_PAYLOAD);
-
-    Ok(())
+struct ShadowsocksConnection {
+    socket: ProxySocket,
 }
 
-#[tokio::test]
-async fn udp_tunnel_aead_2022_aes() {
-    let server_addr = "127.0.0.1:24001".parse::<SocketAddr>().unwrap();
-    let local_addr = "127.0.0.1:24101".parse::<SocketAddr>().unwrap();
+impl ShadowsocksConnection {
+    // FIXME(konishchev): What the difference between server/client config?
+    async fn new(server_address: SocketAddr, config_type: ServerType, secret: String) -> GenericResult<ShadowsocksConnection> {
+        let context = Context::new_shared(config_type);
+        let config = ServerConfig::new(server_address, secret, CipherKind::AEAD2022_BLAKE3_AES_256_GCM);
 
-    udp_tunnel_echo(
-        server_addr,
-        local_addr,
-        "+ANaPOoJTCPbU2JxzpqVsxJIO6Pec6NBWJD7ouEL49U=",
-        CipherKind::AEAD2022_BLAKE3_AES_256_GCM,
-    )
-    .await
-    .unwrap();
+        let socket = match config_type {
+            ServerType::Server => {
+                ProxySocket::bind(context, &config).await.map_err(|e| format!(
+                    "Failed to bind to {}: {}", server_address, e))?
+            },
+            ServerType::Local => {
+                // XXX(konishchev): HERE
+                ProxySocket::connect(context, &config).await.unwrap()
+            },
+        };
+
+        Ok(ShadowsocksConnection {
+            socket,
+        })
+    }
+
+    pub async fn recv_from(&self, buf: &mut [u8]) -> ProxySocketResult<(usize, SocketAddr, Address, usize)> {
+        self.socket.recv_from(buf).await
+    }
+
+    pub async fn send_to(&self, target: SocketAddr, addr: &Address, payload: &[u8]) -> ProxySocketResult<usize> {
+        self.socket.send_to(target, addr, payload).await
+    }
+
+    pub async fn send(&self, addr: &Address, payload: &[u8]) -> ProxySocketResult<usize> {
+        self.socket.send(addr, payload).await
+    }
+    pub async fn recv(&self, buf: &mut [u8]) -> ProxySocketResult<(usize, Address, usize)> {
+        self.socket.recv(buf).await
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test]
+    async fn connection() {
+        let server_addr = "127.0.0.1:24001".parse::<SocketAddr>().unwrap(); // FIXME(konishchev): Make dynamic?
+        let secret = "+ANaPOoJTCPbU2JxzpqVsxJIO6Pec6NBWJD7ouEL49U=";
+
+        let mut buf = vec![0u8; 65536];
+        let client_message: &[u8] = b"client message";
+        let server_message: &[u8] = b"server message";
+
+        let server = ShadowsocksConnection::new(server_addr, ServerType::Server, secret.to_owned()).await.unwrap();
+        let client = ShadowsocksConnection::new(server_addr, ServerType::Local, secret.to_owned()).await.unwrap();
+
+        client.send(&Address::SocketAddress(server_addr), client_message).await.unwrap();
+
+        let (size, peer_addr, remote_addr, ..) = server.recv_from(&mut buf).await.unwrap();
+        assert_eq!(&buf[..size], client_message);
+        server.send_to(peer_addr, &remote_addr, server_message).await.unwrap();
+
+        let (size, ..) = client.recv(&mut buf).await.unwrap();
+        assert_eq!(&buf[..size], server_message);
+    }
 }
