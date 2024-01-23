@@ -1,79 +1,48 @@
-// XXX(konishchev): HERE
-use std::net::SocketAddr;
-use shadowsocks::{
-    config::{ServerConfig, ServerType},
-    context::Context,
-    crypto::CipherKind,
-    relay::{socks5::Address, udprelay::{ProxySocket, proxy_socket::ProxySocketResult}},
-};
-
-use crate::core::GenericResult;
-
-struct ShadowsocksConnection {
-    socket: ProxySocket,
-}
-
-impl ShadowsocksConnection {
-    // FIXME(konishchev): What the difference between server/client config?
-    async fn new(server_address: SocketAddr, config_type: ServerType, secret: String) -> GenericResult<ShadowsocksConnection> {
-        let context = Context::new_shared(config_type);
-        let config = ServerConfig::new(server_address, secret, CipherKind::AEAD2022_BLAKE3_AES_256_GCM);
-
-        let socket = match config_type {
-            ServerType::Server => {
-                ProxySocket::bind(context, &config).await.map_err(|e| format!(
-                    "Failed to bind to {}: {}", server_address, e))?
-            },
-            ServerType::Local => {
-                // XXX(konishchev): HERE
-                ProxySocket::connect(context, &config).await.unwrap()
-            },
-        };
-
-        Ok(ShadowsocksConnection {
-            socket,
-        })
-    }
-
-    pub async fn recv_from(&self, buf: &mut [u8]) -> ProxySocketResult<(usize, SocketAddr, Address, usize)> {
-        self.socket.recv_from(buf).await
-    }
-
-    pub async fn send_to(&self, target: SocketAddr, addr: &Address, payload: &[u8]) -> ProxySocketResult<usize> {
-        self.socket.send_to(target, addr, payload).await
-    }
-
-    pub async fn send(&self, addr: &Address, payload: &[u8]) -> ProxySocketResult<usize> {
-        self.socket.send(addr, payload).await
-    }
-    pub async fn recv(&self, buf: &mut [u8]) -> ProxySocketResult<(usize, Address, usize)> {
-        self.socket.recv(buf).await
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use super::*;
+    use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
+
+    use shadowsocks::{
+        config::{ServerConfig, ServerType},
+        context::Context,
+        crypto::CipherKind,
+        relay::socks5::Address,
+        relay::udprelay::proxy_socket::ProxySocket,
+    };
+
+    use crate::constants;
 
     #[tokio::test]
     async fn connection() {
-        let server_addr = "127.0.0.1:24001".parse::<SocketAddr>().unwrap(); // FIXME(konishchev): Make dynamic?
+        let method = CipherKind::AEAD2022_BLAKE3_AES_256_GCM;
         let secret = "+ANaPOoJTCPbU2JxzpqVsxJIO6Pec6NBWJD7ouEL49U=";
+        let mut server_address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
 
-        let mut buf = vec![0u8; 65536];
-        let client_message: &[u8] = b"client message";
-        let server_message: &[u8] = b"server message";
+        let server_config = ServerConfig::new(server_address, secret, method);
+        let server = ProxySocket::bind(Context::new_shared(ServerType::Server), &server_config).await.unwrap();
+        server_address = server.local_addr().unwrap();
 
-        let server = ShadowsocksConnection::new(server_addr, ServerType::Server, secret.to_owned()).await.unwrap();
-        let client = ShadowsocksConnection::new(server_addr, ServerType::Local, secret.to_owned()).await.unwrap();
+        let client_config = ServerConfig::new(server_address, secret, method);
+        let client = ProxySocket::connect(Context::new_shared(ServerType::Local), &client_config).await.unwrap();
 
-        client.send(&Address::SocketAddress(server_addr), client_message).await.unwrap();
+        let fake_target_address = Address::SocketAddress(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234)));
+        let mut buf = vec![0u8; constants::MTU - constants::IPV4_HEADER_SIZE - constants::UDP_HEADER_SIZE];
 
-        let (size, peer_addr, remote_addr, ..) = server.recv_from(&mut buf).await.unwrap();
-        assert_eq!(&buf[..size], client_message);
-        server.send_to(peer_addr, &remote_addr, server_message).await.unwrap();
+        for pass in 1..=2 {
+            let client_message = format!("client message {pass}");
+            client.send(&fake_target_address, client_message.as_bytes()).await.unwrap();
 
-        let (size, ..) = client.recv(&mut buf).await.unwrap();
-        assert_eq!(&buf[..size], server_message);
+            let (size, peer_addr, remote_addr, _) = server.recv_from(&mut buf).await.unwrap();
+            assert_eq!(peer_addr, client.local_addr().unwrap());
+            assert_eq!(remote_addr, fake_target_address);
+            assert_eq!(&buf[..size], client_message.as_bytes());
+
+            let server_message = format!("server message {pass}");
+            server.send_to(peer_addr, &remote_addr, server_message.as_bytes()).await.unwrap();
+
+            let (size, remote_addr, _) = client.recv(&mut buf).await.unwrap();
+            assert_eq!(remote_addr, fake_target_address);
+            assert_eq!(&buf[..size], server_message.as_bytes());
+        }
     }
 }
