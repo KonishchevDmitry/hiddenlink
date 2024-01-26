@@ -12,8 +12,10 @@ edition = "2021"
 new-ret-no-self = "allow"
 
 [dependencies]
+aes = "0.8"
 async-trait = "0.1.74"
 axum = "0.7.3"
+base64 = "0.21.7"
 bitflags = "2.4.1"
 bytes = "1.5.0"
 clap = "4.4.11"
@@ -33,9 +35,9 @@ rustls-pemfile = "2.0.0"
 serde = "1.0.193"
 serde_derive = "1.0.193"
 serde_yaml = "0.9.27"
-# FIXME(konishchev): Check the features
-shadowsocks = { version = "1.17.1", features = ["aead-cipher-2022"], default-features = false }
+shadowsocks-crypto = { version = "0.5.4", features = ["v2"] }
 socket2 = "0.5.5"
+thiserror = "1.0.56"
 tokio = { version = "1", features = ["io-util", "macros", "rt", "rt-multi-thread", "sync", "time"] }
 tokio-rustls = "0.25.0"
 tokio-tun = "0.11.2"
@@ -46,4 +48,6 @@ x509-parser = "0.15.1"
 bindgen = "0.69.1"
 
 [dev-dependencies]
+matches = "0.1.10"
 rstest = "0.18.2"
+shadowsocks = { version = "1.17.1", features = ["aead-cipher-2022"] }

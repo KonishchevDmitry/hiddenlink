@@ -1,4 +1,4 @@
-mod shadowsocks;
+mod securer;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
