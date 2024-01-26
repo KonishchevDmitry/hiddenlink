@@ -176,8 +176,8 @@ fn decode_secret(method: CipherKind, secret: &str) -> GenericResult<Vec<u8>> {
 
 fn now_timestamp() -> u32 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).ok()
-    .and_then(|duration| duration.as_secs().try_into().ok())
-    .expect("Invalid system time")
+        .and_then(|duration| duration.as_secs().try_into().ok())
+        .expect("Invalid system time")
 }
 
 #[cfg(test)]
