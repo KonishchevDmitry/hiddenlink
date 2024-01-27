@@ -167,20 +167,14 @@ impl Controller {
         let blackhole_labels = metrics::transport_labels(BLACKHOLE_TRANSPORT);
         let _ = self.transport_drops.get_or_create(&blackhole_labels);
 
-        let tunnel_mtu = self.tunnel.mtu()?;
-        let mut packet = BytesMut::with_capacity(tunnel_mtu);
+        let mut buf = BytesMut::zeroed(self.tunnel.mtu()?);
 
         loop {
-            assert!(packet.capacity() >= tunnel_mtu);
-            unsafe {
-                packet.set_len(tunnel_mtu);
-            }
-
-            let size = self.tunnel.recv(&mut packet).await.map_err(|e| format!(
+            let size = self.tunnel.recv(&mut buf).await.map_err(|e| format!(
                 "Failed to read from tun device: {}", e))?;
-            packet.truncate(size);
 
-            util::trace_packet("tun device", &packet);
+            let packet = &buf[..size];
+            util::trace_packet("tun device", packet);
 
             let Some(transport) = self.transports.select() else {
                 trace!("Dropping the packet: there are no active transports.");
@@ -191,7 +185,7 @@ impl Controller {
             trace!("Sending the packet via {}...", transport.name());
 
             let send_start_time = Instant::now();
-            let result = transport.send(&mut packet).await;
+            let result = transport.send(packet).await;
             let send_time = send_start_time.elapsed();
 
             match result {

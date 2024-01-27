@@ -4,7 +4,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::BytesMut;
 use host_port_pair::HostPortPair;
 use log::{trace, debug};
 use prometheus_client::encoding::DescriptorEncoder;
@@ -149,7 +148,7 @@ impl Transport for HttpClientTransport {
         Ok(())
     }
 
-    async fn send(&self, packet: &mut BytesMut) -> EmptyResult {
+    async fn send(&self, packet: &[u8]) -> EmptyResult {
         let connection = self.connections.select().ok_or(
             "There is no open connections")?;
 

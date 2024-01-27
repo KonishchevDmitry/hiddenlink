@@ -2,7 +2,6 @@ use std::os::fd::AsFd;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::BytesMut;
 use itertools::Itertools;
 use log::error;
 use prometheus_client::{
@@ -25,7 +24,7 @@ pub trait Transport: Send + Sync {
     fn name(&self) -> &str;
     fn is_ready(&self) -> bool;
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result;
-    async fn send(&self, packet: &mut BytesMut) -> EmptyResult;
+    async fn send(&self, packet: &[u8]) -> EmptyResult;
 }
 
 pub trait MeteredTransport: Transport {
@@ -153,9 +152,9 @@ impl TransportConnectionStat {
         self.received_data.inc_by(packet.len().try_into().unwrap());
     }
 
-    pub fn on_packet_sent(&self, size: usize) {
+    pub fn on_packet_sent(&self, packet: &[u8]) {
         self.sent_packets.inc();
-        self.sent_data.inc_by(size.try_into().unwrap());
+        self.sent_data.inc_by(packet.len().try_into().unwrap());
     }
 
     pub fn on_packet_dropped(&self) {
