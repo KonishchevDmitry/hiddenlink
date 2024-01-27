@@ -2,7 +2,7 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use log::{info, warn, error};
 use prometheus_client::encoding::DescriptorEncoder;
 use tokio::io::{ReadHalf, WriteHalf};
@@ -88,7 +88,7 @@ impl Transport for HiddenlinkConnection {
         self.writer.collect(encoder)
     }
 
-    async fn send(&self, packet: &[u8]) -> EmptyResult {
+    async fn send(&self, packet: &mut BytesMut) -> EmptyResult {
         self.writer.send(packet).await
     }
 }

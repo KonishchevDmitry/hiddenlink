@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use log::{trace, info, warn, error};
 use prometheus_client::encoding::DescriptorEncoder;
 use rustls::ClientConfig;
@@ -152,7 +152,7 @@ impl Transport for Connection {
         self.writer.collect(encoder)
     }
 
-    async fn send(&self, packet: &[u8]) -> EmptyResult {
+    async fn send(&self, packet: &mut BytesMut) -> EmptyResult {
         self.writer.send(packet).await
     }
 }

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
 
 use async_trait::async_trait;
+use bytes::BytesMut;
 use itertools::Itertools;
 use log::{trace, info, error};
 use nix::sys::resource::Resource;
@@ -201,7 +202,7 @@ impl Transport for HttpServerTransport {
         Ok(())
     }
 
-    async fn send(&self, packet: &[u8]) -> EmptyResult {
+    async fn send(&self, packet: &mut BytesMut) -> EmptyResult {
         let connection = self.connections.lock().unwrap().active.select().ok_or(
             "There is no open connections")?;
 

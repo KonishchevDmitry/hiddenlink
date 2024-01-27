@@ -131,13 +131,16 @@ impl Transport for UdpTransport {
         self.stat.collect_udp_socket(encoder, &self.socket)
     }
 
-    async fn send(&self, buf: &[u8]) -> EmptyResult {
-        self.socket.send_to(buf, self.peer_address).await.map_err(|e| {
+    // XXX(konishchev): Implement
+    async fn send(&self, packet: &mut BytesMut) -> EmptyResult {
+        let size = packet.len();
+
+        self.socket.send_to(packet, self.peer_address).await.map_err(|e| {
             self.stat.on_packet_dropped();
             e
         })?;
 
-        self.stat.on_packet_sent(buf);
+        self.stat.on_packet_sent(size);
         Ok(())
     }
 }
