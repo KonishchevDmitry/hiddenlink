@@ -1,9 +1,14 @@
 name: client-test
 
 transports:
-  - type: insecure-udp
+  - type: udp
     bind_address: 127.0.0.1:3000
     peer_address: 127.0.0.1:2000
+    secret: /rWLxvSXU1u6p/pTFBBK1A==
+
+  # - type: insecure-udp
+  #   bind_address: 127.0.0.1:3000
+  #   peer_address: 127.0.0.1:2000
 
   - type: http-client
     endpoint: server.lan:4000

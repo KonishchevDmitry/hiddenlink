@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::BytesMut;
-use log::{info, error};
+use log::{trace, info, error};
 use prometheus_client::encoding::DescriptorEncoder;
 use serde_derive::{Serialize, Deserialize};
 use tokio::net::UdpSocket;
+use tokio::sync::Mutex as AsyncMutex;
 use validator::Validate;
 
 use crate::constants;
@@ -45,6 +46,7 @@ pub struct UdpTransport {
     labels: TransportLabels,
     socket: UdpSocket,
     securer: Option<UdpConnectionSecurer>,
+    encrypt_buffer: AsyncMutex<BytesMut>,
     peer_address: SocketAddr,
     stat: TransportConnectionStat,
 }
@@ -67,6 +69,7 @@ impl UdpTransport {
             peer_address: config.peer_address,
             socket,
             securer,
+            encrypt_buffer: AsyncMutex::default(),
             stat,
         });
 
@@ -88,7 +91,12 @@ impl UdpTransport {
 
         loop {
             let size = match self.socket.recv_from(&mut buf).await {
-                Ok((size, _)) => {
+                Ok((size, peer_address)) => {
+                    if self.securer.is_some() && peer_address != self.peer_address {
+                        trace!("[{}] Drop message from unknown peer ({peer_address}).", self.name);
+                        continue;
+                    }
+
                     if size == 0 {
                         error!("[{}] Got an empty message from the peer.", self.name);
                         continue;
@@ -97,6 +105,7 @@ impl UdpTransport {
                         error!("[{}] Got a too big message from the peer. Drop it.", self.name);
                         continue;
                     }
+
                     size
                 },
                 Err(err) => {
@@ -105,7 +114,17 @@ impl UdpTransport {
                 }
             };
 
-            let packet = &buf[..size];
+            let packet = match self.securer {
+                Some(ref securer) => match securer.decrypt(&mut buf[..size]) {
+                    Ok(packet) => packet,
+                    Err(err) => {
+                        error!("[{}] Drop packet: {err}.", self.name);
+                        continue;
+                    }
+                },
+                None => &buf[..size],
+            };
+
             self.stat.on_packet_received(packet);
             util::trace_packet(&self.name, packet);
 
@@ -131,13 +150,22 @@ impl Transport for UdpTransport {
         self.stat.collect_udp_socket(encoder, &self.socket)
     }
 
-    async fn send(&self, buf: &[u8]) -> EmptyResult {
-        self.socket.send_to(buf, self.peer_address).await.map_err(|e| {
+    async fn send(&self, packet: &[u8]) -> EmptyResult {
+        match self.securer.as_ref() {
+            Some(securer) => {
+                let mut encrypted = self.encrypt_buffer.lock().await;
+                securer.encrypt(&mut encrypted, packet);
+                self.socket.send_to(&encrypted, self.peer_address).await
+            },
+            None => {
+                self.socket.send_to(packet, self.peer_address).await
+            },
+        }.map_err(|e| {
             self.stat.on_packet_dropped();
             e
         })?;
 
-        self.stat.on_packet_sent(buf);
+        self.stat.on_packet_sent(packet);
         Ok(())
     }
 }

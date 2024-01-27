@@ -61,6 +61,8 @@ impl UdpConnectionSecurer {
             std::mem::size_of_val(&packet_id);
 
         let tag_size = self.method.tag_len();
+
+        buf.truncate(0);
         buf.reserve(header_size + payload.len() + tag_size);
 
         buf.put_u64(session_id);
@@ -118,7 +120,7 @@ impl UdpConnectionSecurer {
         }
 
         let time_diff: i64 = i64::from(timestamp) - i64::from(now_timestamp());
-        if time_diff > 10 || time_diff < -20 {
+        if !(-20..=10).contains(&time_diff) {
             return Err(DecryptError::InvalidTimestamp(time_diff));
         }
 
@@ -140,7 +142,7 @@ impl Session {
         Session {
             session_id,
             packet_id: AtomicU32::new(random.gen()),
-            cipher: AeadCipher::new(method, &key, session_id)
+            cipher: AeadCipher::new(method, key, session_id)
         }
     }
 }
@@ -223,7 +225,6 @@ mod test {
                 client = UdpConnectionSecurer::new(&config).unwrap();
             }
 
-            buf.truncate(0);
             client.encrypt(&mut buf, message.as_bytes());
             assert_eq!(buf.len(), expected_size);
 
