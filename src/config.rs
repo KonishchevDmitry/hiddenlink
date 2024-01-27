@@ -9,7 +9,7 @@ use crate::core::GenericResult;
 
 use crate::transport::default_transport_weight;
 pub use crate::transport::http::{HttpClientTransportConfig, HttpServerTransportConfig};
-pub use crate::transport::udp::UdpTransportConfig;
+pub use crate::transport::udp::{InsecureUdpTransportConfig, SecureUdpTransportConfig};
 
 #[derive(Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
@@ -55,7 +55,8 @@ pub struct TransportSpec {
 pub enum TransportConfig {
     HttpClient(HttpClientTransportConfig),
     HttpServer(HttpServerTransportConfig),
-    Udp(UdpTransportConfig),
+    InsecureUdp(InsecureUdpTransportConfig),
+    Udp(SecureUdpTransportConfig),
 }
 
 impl Validate for TransportConfig {
@@ -63,6 +64,7 @@ impl Validate for TransportConfig {
         match self {
             TransportConfig::HttpClient(t) => t.validate(),
             TransportConfig::HttpServer(t) => t.validate(),
+            TransportConfig::InsecureUdp(t) => t.validate(),
             TransportConfig::Udp(t) => t.validate(),
         }
     }

@@ -49,6 +49,9 @@ impl Controller {
         let mut http_servers = 0;
         let mut http_server_index = 0;
 
+        let mut insecure_udp_transports = 0;
+        let mut insecure_udp_transport_index = 0;
+
         let mut udp_transports = 0;
         let mut udp_transport_index = 0;
 
@@ -56,6 +59,7 @@ impl Controller {
             match &config.transport {
                 TransportConfig::HttpClient(_) => http_clients += 1,
                 TransportConfig::HttpServer(_) => http_servers += 1,
+                TransportConfig::InsecureUdp(_) => insecure_udp_transports += 1,
                 TransportConfig::Udp(_) => udp_transports += 1,
             }
         }
@@ -90,8 +94,8 @@ impl Controller {
                         return Err!("Duplicated transport name: {name:?}");
                     }
 
-                    HttpClientTransport::new(name, config, tunnel).await.map_err(|e| format!(
-                        "Failed to initialize HTTP client transport: {e}"))?
+                    HttpClientTransport::new(&name, config, tunnel).await.map_err(|e| format!(
+                        "Failed to initialize {name:?} transport: {e}"))?
                 },
 
                 TransportConfig::HttpServer(config) => {
@@ -107,8 +111,25 @@ impl Controller {
                         return Err!("Duplicated transport name: {name:?}");
                     }
 
-                    HttpServerTransport::new(name, config, tunnel).await.map_err(|e| format!(
-                      "Failed to initialize HTTP server transport: {e}"))?
+                    HttpServerTransport::new(&name, config, tunnel).await.map_err(|e| format!(
+                      "Failed to initialize {name:?} transport: {e}"))?
+                },
+
+                TransportConfig::InsecureUdp(config) => {
+                    insecure_udp_transport_index += 1;
+
+                    let name = name.unwrap_or_else(|| if insecure_udp_transports > 1 {
+                        format!("Insecure UDP transport #{insecure_udp_transport_index}")
+                    } else {
+                        "Insecure UDP transport".to_owned()
+                    });
+
+                    if !names.insert(name.clone()) {
+                        return Err!("Duplicated transport name: {name:?}");
+                    }
+
+                    UdpTransport::new(&name, config, None, tunnel).await.map_err(|e| format!(
+                        "Failed to initialize {name:?} transport: {e}"))?
                 },
 
                 TransportConfig::Udp(config) => {
@@ -124,8 +145,8 @@ impl Controller {
                         return Err!("Duplicated transport name: {name:?}");
                     }
 
-                    UdpTransport::new(name, config, tunnel).await.map_err(|e| format!(
-                        "Failed to initialize UDP transport: {e}"))?
+                    UdpTransport::new(&name, &config.udp, Some(&config.securer), tunnel).await.map_err(|e| format!(
+                        "Failed to initialize {name:?} transport: {e}"))?
                 },
             };
 

@@ -60,8 +60,8 @@ pub struct HttpServerTransport {
 }
 
 impl HttpServerTransport {
-    pub async fn new(name: String, config: &HttpServerTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn MeteredTransport>> {
-        let labels = metrics::transport_labels(&name);
+    pub async fn new(name: &str, config: &HttpServerTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn MeteredTransport>> {
+        let labels = metrics::transport_labels(name);
         let secret = Arc::new(config.secret.clone());
         let domains = Arc::new(TlsDomains::new(&config.default_domain, &config.additional_domains)?);
 
@@ -84,7 +84,7 @@ impl HttpServerTransport {
             "Failed to bind to {}: {}", config.bind_address, e))?;
 
         let transport = Arc::new(HttpServerTransport{
-            name,
+            name: name.to_owned(),
             labels,
 
             secret,

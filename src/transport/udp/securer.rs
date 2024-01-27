@@ -7,7 +7,9 @@ use aes::cipher::{BlockDecrypt, BlockEncrypt, BlockSizeUser, KeyInit};
 use base64::Engine;
 use bytes::{BufMut, BytesMut};
 use rand::Rng;
+use serde_derive::{Serialize, Deserialize};
 use shadowsocks_crypto::CipherKind;
+use validator::Validate;
 
 use crate::core::GenericResult;
 
@@ -15,9 +17,15 @@ const METHOD: CipherKind = CipherKind::AEAD2022_BLAKE3_AES_128_GCM;
 use shadowsocks_crypto::v2::udp::AesGcmCipher as AeadCipher;
 use aes::Aes128 as BlockCipher;
 
+#[derive(Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct UdpConnectionSecurerConfig {
+    secret: String,
+}
+
 // Inspired by Shadowsocks.
 // See https://github.com/Shadowsocks-NET/shadowsocks-specs/blob/main/2022-1-shadowsocks-2022-edition.md for details.
-struct UdpConnectionSecurer {
+pub struct UdpConnectionSecurer {
     method: CipherKind,
     key: Vec<u8>,
     session: Session,
@@ -27,9 +35,9 @@ struct UdpConnectionSecurer {
 
 impl UdpConnectionSecurer {
     // Secret generation: `openssl rand -base64 16`
-    fn new(secret: &str) -> GenericResult<UdpConnectionSecurer> {
+    pub fn new(config: &UdpConnectionSecurerConfig) -> GenericResult<UdpConnectionSecurer> {
         let method = METHOD;
-        let key = decode_secret(method, secret)?;
+        let key = decode_secret(method, &config.secret)?;
         let session = Session::new(method, &key);
         let header_cipher = BlockCipher::new_from_slice(&key).unwrap();
 
@@ -42,7 +50,7 @@ impl UdpConnectionSecurer {
         })
     }
 
-    fn encrypt(&self, buf: &mut BytesMut, payload: &[u8]) {
+    pub fn encrypt(&self, buf: &mut BytesMut, payload: &[u8]) {
         let session_id = self.session.session_id;
         let timestamp = now_timestamp();
         let packet_id = self.session.packet_id.fetch_add(1, Ordering::Relaxed);
@@ -197,20 +205,22 @@ mod test {
 
     #[test]
     fn securer() {
-        let secret = "2RUSCKTOeOhb9QSuTWbijw==";
+        let config = UdpConnectionSecurerConfig {
+            secret: "2RUSCKTOeOhb9QSuTWbijw==".to_owned()
+        };
 
         let message = "some secret message";
         let expected_size = message.as_bytes().len() + 32;
 
-        let mut client = UdpConnectionSecurer::new(secret).unwrap();
-        let server = UdpConnectionSecurer::new(secret).unwrap();
+        let mut client = UdpConnectionSecurer::new(&config).unwrap();
+        let server = UdpConnectionSecurer::new(&config).unwrap();
 
         let mut encrypted = None;
         let mut buf = BytesMut::new();
 
         for pass in 1..=4 {
             if pass == 3 {
-                client = UdpConnectionSecurer::new(secret).unwrap();
+                client = UdpConnectionSecurer::new(&config).unwrap();
             }
 
             buf.truncate(0);

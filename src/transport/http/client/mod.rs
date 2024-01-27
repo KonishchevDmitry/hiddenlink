@@ -65,8 +65,8 @@ pub struct HttpClientTransport {
 }
 
 impl HttpClientTransport {
-    pub async fn new(name: String, config: &HttpClientTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn MeteredTransport>> {
-        let labels = metrics::transport_labels(&name);
+    pub async fn new(name: &str, config: &HttpClientTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn MeteredTransport>> {
+        let labels = metrics::transport_labels(name);
 
         let mut flags = ConnectionFlags::empty();
         flags.set(ConnectionFlags::INGRESS, config.ingress);
@@ -105,10 +105,10 @@ impl HttpClientTransport {
             let connection_name = if config.connections > 1 {
                 format!("{name} #{id}")
             } else {
-                name.clone()
+                name.to_owned()
             };
 
-            let stat = Arc::new(TransportConnectionStat::new(&name, &connection_name));
+            let stat = Arc::new(TransportConnectionStat::new(name, &connection_name));
             let connection = Arc::new(Connection::new(connection_name, connection_config.clone(), stat));
 
             let weight = connections.add(connection.clone(), config.connection_min_weight, config.connection_max_weight).weight;
@@ -124,7 +124,7 @@ impl HttpClientTransport {
         }
 
         Ok(Arc::new(HttpClientTransport{
-            name,
+            name: name.to_owned(),
             labels,
             connections,
         }))
