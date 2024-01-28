@@ -11,6 +11,10 @@ edition = "2021"
 [lints.clippy]
 new-ret-no-self = "allow"
 
+[profile.release]
+codegen-units = 1
+lto = true
+
 [dependencies]
 aes = "0.8"
 async-trait = "0.1.74"
