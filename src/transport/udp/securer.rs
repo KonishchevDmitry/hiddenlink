@@ -20,7 +20,7 @@ use aes::Aes128 as BlockCipher;
 #[derive(Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct UdpConnectionSecurerConfig {
-    secret: String,
+    secret: String, // Generation: `openssl rand -base64 16`
 }
 
 // Inspired by Shadowsocks.
@@ -34,7 +34,6 @@ pub struct UdpConnectionSecurer {
 }
 
 impl UdpConnectionSecurer {
-    // Secret generation: `openssl rand -base64 16`
     pub fn new(config: &UdpConnectionSecurerConfig) -> GenericResult<UdpConnectionSecurer> {
         let method = METHOD;
         let key = decode_secret(method, &config.secret)?;
