@@ -184,6 +184,7 @@ pub fn pre_configure_hiddenlink_socket(connection: &TcpStream) -> EmptyResult {
     ))
 }
 
+// FIXME(konishchev): echo tcp_bbr > /etc/modules-load.d/bbr.conf +https://stackoverflow.com/questions/59265004/how-to-change-tcp-congestion-control-algorithm-using-setsockopt-call-from-chttps://stackoverflow.com/questions/59265004/how-to-change-tcp-congestion-control-algorithm-using-setsockopt-call-from-c
 pub fn post_configure_hiddenlink_socket(connection: &TcpStream) -> EmptyResult {
     // When hiddenlink handshake is completed, all subsequent writes to the socket will contain actual packets, so
     // disable Nagle algorithm to not delay them. But please note that small packets can actually reveal our tunnel

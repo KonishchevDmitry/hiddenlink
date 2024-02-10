@@ -35,6 +35,7 @@ pub struct HttpClientTransportConfig {
     #[serde(default="HttpClientTransportConfig::default_direction")]
     egress: bool,
 
+    // FIXME(konishchev): Packet reordering?
     #[validate(range(min = 1, max = 10))]
     #[serde(default = "HttpClientTransportConfig::default_connections")]
     connections: usize,
