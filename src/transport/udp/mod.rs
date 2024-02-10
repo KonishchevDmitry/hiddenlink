@@ -1,7 +1,7 @@
 mod securer;
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::BytesMut;
@@ -9,7 +9,8 @@ use log::{trace, info, error};
 use prometheus_client::encoding::DescriptorEncoder;
 use serde_derive::{Serialize, Deserialize};
 use tokio::net::UdpSocket;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::time::{self, Duration, Instant};
 use validator::Validate;
 
 use crate::constants;
@@ -48,6 +49,8 @@ pub struct UdpTransport {
     securer: Option<UdpConnectionSecurer>,
     encrypt_buffer: AsyncMutex<BytesMut>,
     peer_address: SocketAddr,
+    state: Mutex<State>,
+    ping_needed: Notify,
     stat: TransportConnectionStat,
 }
 
@@ -66,10 +69,12 @@ impl UdpTransport {
         let transport = Arc::new(UdpTransport {
             name: name.to_owned(),
             labels,
-            peer_address: config.peer_address,
             socket,
             securer,
             encrypt_buffer: AsyncMutex::default(),
+            peer_address: config.peer_address,
+            state: Mutex::new(State::new()),
+            ping_needed: Notify::new(),
             stat,
         });
 
@@ -78,14 +83,21 @@ impl UdpTransport {
         {
             let transport = transport.clone();
             tokio::spawn(async move {
-                transport.handle(tunnel).await
+                transport.receiver(tunnel).await
+            });
+        }
+
+        {
+            let transport = transport.clone();
+            tokio::spawn(async move {
+                transport.pinger().await
             });
         }
 
         Ok(transport)
     }
 
-    async fn handle(&self, tunnel: Arc<Tunnel>) {
+    async fn receiver(&self, tunnel: Arc<Tunnel>) {
         let max_size = constants::MTU - constants::IPV4_HEADER_SIZE - constants::UDP_HEADER_SIZE;
         let mut buf = BytesMut::zeroed(max_size + 1);
 
@@ -122,15 +134,121 @@ impl UdpTransport {
                         continue;
                     }
                 },
-                None => &buf[..size],
+                None => &mut buf[..size],
             };
 
-            self.stat.on_packet_received(packet);
+            let egress_works = packet[0] & INGRESS_STATE_MARKER != 0;
+            packet[0] &= !INGRESS_STATE_MARKER;
+            self.on_ingress_packet(egress_works);
+
+            if packet.len() == 1 {
+                trace!("[{}] Got a keep alive packet (egress_works={egress_works}).", self.name);
+                continue;
+            }
+
             util::trace_packet(&self.name, packet);
+            self.stat.on_packet_received(packet);
 
             if let Err(err) = tunnel.send(packet).await {
                 error!("[{}] {}.", self.name, err);
             }
+        }
+    }
+
+    async fn pinger(&self) {
+        let mut encrypted = BytesMut::new();
+        let mut next_ping_time = Instant::now();
+
+        loop {
+            tokio::select! {
+                _ = time::sleep_until(next_ping_time) => {},
+                _ = self.ping_needed.notified() => {},
+            };
+
+            let now = Instant::now();
+            let ingress_works = {
+                let mut state = self.state.lock().unwrap();
+
+                if state.needs_connection_acknowledge {
+                    state.needs_connection_acknowledge = false;
+                } else if let Some(last_packet_time) = state.last_egress_packet_time {
+                    next_ping_time = last_packet_time + KEEP_ALIVE_INTERVAL;
+                    if next_ping_time > now {
+                        continue;
+                    }
+                };
+
+                match state.last_ingress_packet {
+                    Some(last_packet) => now.duration_since(last_packet.time) < KEEP_ALIVE_TIMEOUT,
+                    None => false,
+                }
+            };
+
+            trace!("[{}] Sending keep alive message (ingress_works={ingress_works})...", self.name);
+
+            let message: [u8; 1] = [if ingress_works {
+                INGRESS_STATE_MARKER
+            } else {
+                0
+            }];
+
+            let result = match self.securer.as_ref() {
+                Some(securer) => {
+                    securer.encrypt(&mut encrypted, &message);
+                    self.socket.send_to(&encrypted, self.peer_address).await
+                },
+                None => {
+                    self.socket.send_to(&message, self.peer_address).await
+                },
+            };
+
+            let send_time = self.on_egress_packet();
+            if let Err(err) = result {
+                trace!("[{}] Failed to send keep alive message: {err}.", self.name);
+            }
+
+            next_ping_time = send_time + KEEP_ALIVE_INTERVAL;
+        }
+    }
+
+    fn on_egress_packet(&self) -> Instant {
+        let packet_time = Instant::now();
+        self.state.lock().unwrap().last_egress_packet_time = Some(packet_time);
+        packet_time
+    }
+
+    fn on_ingress_packet(&self, egress_works: bool) {
+        let receive_time = Instant::now();
+
+        let mut is_first_packet = false;
+        let mut was_connected = false;
+
+        {
+            let mut state = self.state.lock().unwrap();
+
+            match state.last_ingress_packet {
+                Some(last_packet) if receive_time.duration_since(last_packet.time) < KEEP_ALIVE_TIMEOUT => {
+                    was_connected = last_packet.egress_works;
+                },
+                _ => {
+                    is_first_packet = true;
+                    state.needs_connection_acknowledge = true;
+                },
+            };
+
+            state.last_ingress_packet = Some(IngressPacket {
+                time: receive_time,
+                egress_works,
+            });
+        }
+
+        if is_first_packet {
+            trace!("[{}] Got a first ingress packet (egress_works={egress_works}).", self.name);
+            self.ping_needed.notify_one();
+        }
+
+        if egress_works && !was_connected {
+            trace!("[{}] Connected.", self.name);
         }
     }
 }
@@ -142,7 +260,8 @@ impl Transport for UdpTransport {
     }
 
     fn is_ready(&self) -> bool {
-        true
+        let state = *self.state.lock().unwrap();
+        state.connected()
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
@@ -151,7 +270,9 @@ impl Transport for UdpTransport {
     }
 
     async fn send(&self, packet: &[u8]) -> EmptyResult {
-        match self.securer.as_ref() {
+        // XXX(konishchev): Set marker
+
+        let result = match self.securer.as_ref() {
             Some(securer) => {
                 let mut encrypted = self.encrypt_buffer.lock().await;
                 securer.encrypt(&mut encrypted, packet);
@@ -160,10 +281,13 @@ impl Transport for UdpTransport {
             None => {
                 self.socket.send_to(packet, self.peer_address).await
             },
-        }.map_err(|e| {
+        };
+
+        self.on_egress_packet();
+        if let Err(err) = result {
             self.stat.on_packet_dropped();
-            e
-        })?;
+            return Err(err.into());
+        }
 
         self.stat.on_packet_sent(packet);
         Ok(())
@@ -174,4 +298,40 @@ impl MeteredTransport for UdpTransport {
     fn labels(&self) -> &TransportLabels {
         &self.labels
     }
+}
+
+// This bit is always zero in IPv4/IPv6 packets, so we use it to store current ingress state
+const INGRESS_STATE_MARKER: u8 = 1 << 4;
+
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(3);
+const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy)]
+struct State {
+    last_ingress_packet: Option<IngressPacket>,
+    last_egress_packet_time: Option<Instant>,
+    needs_connection_acknowledge: bool,
+}
+
+impl State {
+    fn new() -> State {
+        State {
+            last_ingress_packet: None,
+            last_egress_packet_time: None,
+            needs_connection_acknowledge: false,
+        }
+    }
+
+    fn connected(&self) -> bool {
+        match self.last_ingress_packet {
+            Some(last_packet) => last_packet.egress_works && last_packet.time.elapsed() < KEEP_ALIVE_TIMEOUT,
+            None => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct IngressPacket {
+    time: Instant,
+    egress_works: bool,
 }

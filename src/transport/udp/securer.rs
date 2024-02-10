@@ -85,7 +85,7 @@ impl UdpConnectionSecurer {
         self.header_cipher.encrypt_block(Block::from_mut_slice(header));
     }
 
-    pub fn decrypt<'a>(&self, payload: &'a mut [u8]) -> Result<&'a [u8], DecryptError> {
+    pub fn decrypt<'a>(&self, payload: &'a mut [u8]) -> Result<&'a mut [u8], DecryptError> {
         let header_size = 16;
         let tag_size = self.method.tag_len();
 
@@ -123,7 +123,8 @@ impl UdpConnectionSecurer {
             return Err(DecryptError::InvalidTimestamp(time_diff));
         }
 
-        Ok(&payload[header_size..payload.len() - tag_size])
+        let payload_size = payload.len();
+        Ok(&mut payload[header_size..payload_size - tag_size])
     }
 }
 
