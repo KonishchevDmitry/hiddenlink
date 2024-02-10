@@ -9,6 +9,7 @@ use prometheus_client::{
     collector::Collector,
     metrics::counter::Counter,
     metrics::family::Family,
+    metrics::gauge::ConstGauge,
     metrics::histogram::Histogram,
     encoding::DescriptorEncoder,
 };
@@ -210,7 +211,20 @@ impl Collector for Controller {
         self.tunnel.collect(&mut encoder)?;
 
         for weighted in self.transports.iter() {
-            weighted.transport.collect(&mut encoder)?;
+            let transport = &weighted.transport;
+
+            let state = if transport.is_ready() {
+                "connected"
+            } else {
+                "unavailable"
+            };
+
+            metrics::collect_family(&mut encoder, "transport_state", "Current transport state", &[
+                (metrics::TRANSPORT_LABEL, transport.name()),
+                ("state", state),
+            ], &ConstGauge::new(1))?;
+
+            transport.collect(&mut encoder)?;
         }
 
         metrics::collect_metric(
