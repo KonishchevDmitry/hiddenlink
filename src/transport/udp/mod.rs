@@ -179,7 +179,7 @@ impl UdpTransport {
                 };
 
                 match state.last_ingress_packet {
-                    Some(last_packet) => now.duration_since(last_packet.time) < KEEP_ALIVE_TIMEOUT,
+                    Some(last_packet) => !last_packet.is_timed_out(now),
                     None => false,
                 }
             };
@@ -218,7 +218,7 @@ impl UdpTransport {
     }
 
     fn on_ingress_packet(&self, egress_works: bool) {
-        let receive_time = Instant::now();
+        let now = Instant::now();
 
         let mut is_first_packet = false;
         let mut was_connected = false;
@@ -227,7 +227,7 @@ impl UdpTransport {
             let mut state = self.state.lock().unwrap();
 
             match state.last_ingress_packet {
-                Some(last_packet) if receive_time.duration_since(last_packet.time) < KEEP_ALIVE_TIMEOUT => {
+                Some(last_packet) if !last_packet.is_timed_out(now) => {
                     was_connected = last_packet.egress_works;
                 },
                 _ => {
@@ -237,7 +237,7 @@ impl UdpTransport {
             };
 
             state.last_ingress_packet = Some(IngressPacket {
-                time: receive_time,
+                time: now,
                 egress_works,
             });
         }
@@ -269,8 +269,12 @@ impl Transport for UdpTransport {
         self.stat.collect_udp_socket(encoder, &self.socket)
     }
 
-    async fn send(&self, packet: &[u8]) -> EmptyResult {
-        // XXX(konishchev): Set marker
+    async fn send(&self, packet: &mut [u8]) -> EmptyResult {
+        if let Some(last_ingress_packet) = self.state.lock().unwrap().last_ingress_packet {
+            if !last_ingress_packet.is_timed_out(Instant::now()) {
+                packet[0] |= INGRESS_STATE_MARKER;
+            }
+        }
 
         let result = match self.securer.as_ref() {
             Some(securer) => {
@@ -324,7 +328,7 @@ impl State {
 
     fn connected(&self) -> bool {
         match self.last_ingress_packet {
-            Some(last_packet) => last_packet.egress_works && last_packet.time.elapsed() < KEEP_ALIVE_TIMEOUT,
+            Some(last_packet) => last_packet.egress_works && !last_packet.is_timed_out(Instant::now()),
             None => false,
         }
     }
@@ -334,4 +338,10 @@ impl State {
 struct IngressPacket {
     time: Instant,
     egress_works: bool,
+}
+
+impl IngressPacket {
+    fn is_timed_out(&self, now: Instant) -> bool {
+        now.duration_since(self.time) >= KEEP_ALIVE_TIMEOUT
+    }
 }

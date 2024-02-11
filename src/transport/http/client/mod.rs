@@ -149,7 +149,7 @@ impl Transport for HttpClientTransport {
         Ok(())
     }
 
-    async fn send(&self, packet: &[u8]) -> EmptyResult {
+    async fn send(&self, packet: &mut [u8]) -> EmptyResult {
         let connection = self.connections.select().ok_or(
             "There is no open connections")?;
 

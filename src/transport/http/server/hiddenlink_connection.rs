@@ -88,7 +88,7 @@ impl Transport for HiddenlinkConnection {
         self.writer.collect(encoder)
     }
 
-    async fn send(&self, packet: &[u8]) -> EmptyResult {
+    async fn send(&self, packet: &mut [u8]) -> EmptyResult {
         self.writer.send(packet).await
     }
 }

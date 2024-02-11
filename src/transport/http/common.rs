@@ -145,7 +145,7 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
     }
 
     // FIXME(konishchev): Check socket buffers?
-    async fn send(&self, packet: &[u8]) -> EmptyResult {
+    async fn send(&self, packet: &mut [u8]) -> EmptyResult {
         let writer = self.writer.lock().unwrap().as_ref().ok_or_else(|| {
             self.stat.on_packet_dropped();
             "Connection is closed"

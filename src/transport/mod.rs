@@ -24,7 +24,7 @@ pub trait Transport: Send + Sync {
     fn name(&self) -> &str;
     fn is_ready(&self) -> bool;
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result;
-    async fn send(&self, packet: &[u8]) -> EmptyResult;
+    async fn send(&self, packet: &mut [u8]) -> EmptyResult;
 }
 
 pub trait MeteredTransport: Transport {

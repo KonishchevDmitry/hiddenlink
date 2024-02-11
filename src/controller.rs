@@ -174,7 +174,7 @@ impl Controller {
             let size = self.tunnel.recv(&mut buf).await.map_err(|e| format!(
                 "Failed to read from tun device: {}", e))?;
 
-            let packet = &buf[..size];
+            let packet = &mut buf[..size];
             util::trace_packet("tun device", packet);
 
             let Some(transport) = self.transports.select() else {
