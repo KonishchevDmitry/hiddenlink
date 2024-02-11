@@ -11,8 +11,9 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio_rustls::server::TlsStream;
 
 use crate::core::EmptyResult;
-use crate::transport::{Transport, TransportDirection, TransportConnectionStat};
+use crate::transport::{Transport, TransportDirection};
 use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter};
+use crate::transport::stat::TransportConnectionStat;
 use crate::tunnel::Tunnel;
 use crate::util;
 

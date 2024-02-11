@@ -16,8 +16,9 @@ use validator::Validate;
 use crate::constants;
 use crate::core::{GenericResult, EmptyResult};
 use crate::metrics::{self, TransportLabels};
-use crate::transport::{Transport, TransportDirection, MeteredTransport, TransportConnectionStat};
+use crate::transport::{Transport, TransportDirection, MeteredTransport};
 use crate::transport::udp::securer::UdpConnectionSecurer;
+use crate::transport::stat::TransportConnectionStat;
 use crate::tunnel::Tunnel;
 use crate::util;
 

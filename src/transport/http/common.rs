@@ -14,7 +14,8 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::{constants, util};
 use crate::core::{GenericResult, EmptyResult};
-use crate::transport::{Transport, TransportDirection, TransportConnectionStat};
+use crate::transport::{Transport, TransportDirection};
+use crate::transport::stat::TransportConnectionStat;
 
 pub const MIN_SECRET_LEN: usize = 10;
 

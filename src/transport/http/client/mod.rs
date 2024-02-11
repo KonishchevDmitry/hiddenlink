@@ -14,10 +14,11 @@ use validator::Validate;
 
 use crate::core::{GenericResult, GenericError, EmptyResult};
 use crate::metrics::{TransportLabels, self};
-use crate::transport::{Transport, TransportDirection, MeteredTransport, WeightedTransports, TransportConnectionStat, default_transport_weight};
+use crate::transport::{Transport, TransportDirection, MeteredTransport, WeightedTransports, default_transport_weight};
 use crate::transport::http::client::connection::{Connection, ConnectionConfig};
 use crate::transport::http::common::{ConnectionFlags, MIN_SECRET_LEN};
 use crate::transport::http::tls;
+use crate::transport::stat::TransportConnectionStat;
 use crate::tunnel::Tunnel;
 
 #[derive(Serialize, Deserialize, Validate)]

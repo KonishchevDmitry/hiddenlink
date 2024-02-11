@@ -21,11 +21,12 @@ use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::metrics::{self, TransportLabels};
-use crate::transport::{Transport, TransportDirection, MeteredTransport, WeightedTransports, TransportConnectionStat};
+use crate::transport::{Transport, TransportDirection, MeteredTransport, WeightedTransports};
 use crate::transport::http::common::MIN_SECRET_LEN;
 use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
 use crate::transport::http::server::server_connection::ServerConnection;
 use crate::transport::http::tls::{self, TlsDomains, TlsDomainConfig};
+use crate::transport::stat::TransportConnectionStat;
 use crate::tunnel::Tunnel;
 
 #[derive(Serialize, Deserialize, Validate)]

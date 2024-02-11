@@ -15,9 +15,10 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
 
 use crate::core::{GenericResult, EmptyResult};
-use crate::transport::{Transport, TransportDirection, TransportConnectionStat};
+use crate::transport::{Transport, TransportDirection};
 use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter, pre_configure_hiddenlink_socket,
     post_configure_hiddenlink_socket};
+use crate::transport::stat::TransportConnectionStat;
 use crate::tunnel::Tunnel;
 use crate::util;
 
