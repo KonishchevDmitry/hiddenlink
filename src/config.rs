@@ -7,7 +7,6 @@ use validator::{Validate, ValidationErrors};
 
 use crate::core::GenericResult;
 
-use crate::transport::default_transport_weight;
 pub use crate::transport::http::{HttpClientTransportConfig, HttpServerTransportConfig};
 pub use crate::transport::udp::{InsecureUdpTransportConfig, SecureUdpTransportConfig};
 
@@ -40,10 +39,6 @@ impl Config {
 // Don't use #[serde(deny_unknown_fields)] because of #[serde(flatten)]
 pub struct TransportSpec {
     pub name: Option<String>,
-
-    #[validate(range(min = 1))]
-    #[serde(default="default_transport_weight")]
-    pub weight: u16,
 
     #[validate]
     #[serde(flatten)]

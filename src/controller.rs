@@ -18,7 +18,7 @@ use tokio_tun::Tun;
 use crate::config::{Config, TransportConfig};
 use crate::core::{GenericResult, EmptyResult};
 use crate::metrics::{self, TransportLabels};
-use crate::transport::{MeteredTransport, WeightedTransports};
+use crate::transport::MeteredTransport;
 use crate::transport::http::{HttpClientTransport, HttpServerTransport};
 use crate::transport::udp::UdpTransport;
 use crate::tunnel::Tunnel;
@@ -28,7 +28,7 @@ const BLACKHOLE_TRANSPORT: &str = "Blackhole";
 
 pub struct Controller {
     tunnel: Arc<Tunnel>,
-    transports: WeightedTransports<dyn MeteredTransport>,
+    transports: Vec<Arc<dyn MeteredTransport>>,
     transport_drops: Family<TransportLabels, Counter>,
     transport_send_times: Family<TransportLabels, Histogram>,
 }
@@ -66,7 +66,7 @@ impl Controller {
         }
 
         let mut names = HashSet::new();
-        let mut transports = WeightedTransports::new();
+        let mut transports = Vec::new();
 
         for config in &config.transports {
             let tunnel = tunnel.clone();
@@ -151,7 +151,7 @@ impl Controller {
                 },
             };
 
-            transports.add(transport, config.weight, config.weight);
+            transports.push(transport);
         }
 
         Ok(Controller {
@@ -177,7 +177,7 @@ impl Controller {
             let packet = &mut buf[..size];
             util::trace_packet("tun device", packet);
 
-            let Some(transport) = self.transports.select() else {
+            let Some(transport) = self.select_transport() else {
                 trace!("Dropping the packet: there are no active transports.");
                 self.transport_drops.get_or_create(&blackhole_labels).inc();
                 continue;
@@ -204,15 +204,22 @@ impl Controller {
             self.transport_send_times.get_or_create(transport.labels()).observe(send_time.as_secs_f64());
         }
     }
+
+    fn select_transport(&self) -> Option<&dyn MeteredTransport> {
+        for transport in &self.transports {
+            if transport.is_ready() {
+                return Some(transport.as_ref());
+            }
+        }
+        None
+    }
 }
 
 impl Collector for Controller {
     fn encode(&self, mut encoder: DescriptorEncoder) -> std::fmt::Result {
         self.tunnel.collect(&mut encoder)?;
 
-        for weighted in self.transports.iter() {
-            let transport = &weighted.transport;
-
+        for transport in &self.transports {
             let state = if transport.is_ready() {
                 "connected"
             } else {
