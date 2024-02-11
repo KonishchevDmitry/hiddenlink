@@ -21,7 +21,8 @@ use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::metrics::{self, TransportLabels};
-use crate::transport::{Transport, TransportDirection, MeteredTransport, WeightedTransports};
+use crate::transport::{Transport, TransportDirection, MeteredTransport};
+use crate::transport::connections::TransportConnections;
 use crate::transport::http::common::MIN_SECRET_LEN;
 use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
 use crate::transport::http::server::server_connection::ServerConnection;
@@ -159,8 +160,10 @@ impl HttpServerTransport {
                     request.name, request.flags, request.preread_data, request.connection, stat,
                 ));
 
-                // FIXME(konishchev): Get weight from client
-                connections.lock().unwrap().active.add(connection.clone(), 100, 100);
+                if !connections.lock().unwrap().active.add(connection.clone()) {
+                    trace!("[{}] Replacing the previous hiddenlink connection with the new one.", connection.name());
+                }
+
                 connection.handle(tunnel).await;
                 connections.lock().unwrap().active.remove(connection);
             });
@@ -181,10 +184,9 @@ impl Transport for HttpServerTransport {
     fn connected(&self) -> bool {
         let mut directions = TransportDirection::empty();
 
-        for weighted in self.connections.lock().unwrap().active.iter() {
-            let transport = &weighted.transport;
-            if transport.connected() {
-                directions |= transport.direction();
+        for connection in self.connections.lock().unwrap().active.iter() {
+            if connection.connected() {
+                directions |= connection.direction();
             }
         }
 
@@ -203,7 +205,7 @@ impl Transport for HttpServerTransport {
         let (connections, stats) = {
             let connections = self.connections.lock().unwrap();
             (
-                connections.active.iter().map(|weighted| weighted.transport.clone()).collect_vec(),
+                connections.active.iter().cloned().collect_vec(),
                 connections.stat.values().cloned().collect_vec(),
             )
         };
@@ -220,7 +222,7 @@ impl Transport for HttpServerTransport {
     }
 
     async fn send(&self, packet: &mut [u8]) -> EmptyResult {
-        let connection = self.connections.lock().unwrap().active.select().ok_or(
+        let connection = self.connections.lock().unwrap().active.select(packet).ok_or(
             "There is no open connections")?;
 
         trace!("Sending the packet via {}...", connection.name());
@@ -238,6 +240,6 @@ impl MeteredTransport for HttpServerTransport {
 
 #[derive(Default)]
 struct HiddenlinkConnections {
-    active: WeightedTransports<HiddenlinkConnection>,
+    active: TransportConnections<HiddenlinkConnection>,
     stat: HashMap<String, Arc<TransportConnectionStat>>,
 }

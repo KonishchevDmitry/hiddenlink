@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use host_port_pair::HostPortPair;
-use log::{trace, debug};
+use log::trace;
 use prometheus_client::encoding::DescriptorEncoder;
 use rustls::ClientConfig;
 use rustls::pki_types::DnsName;
@@ -14,7 +14,8 @@ use validator::Validate;
 
 use crate::core::{GenericResult, GenericError, EmptyResult};
 use crate::metrics::{TransportLabels, self};
-use crate::transport::{Transport, TransportDirection, MeteredTransport, WeightedTransports, default_transport_weight};
+use crate::transport::{Transport, TransportDirection, MeteredTransport};
+use crate::transport::connections::TransportConnections;
 use crate::transport::http::client::connection::{Connection, ConnectionConfig};
 use crate::transport::http::common::{ConnectionFlags, MIN_SECRET_LEN};
 use crate::transport::http::tls;
@@ -40,14 +41,6 @@ pub struct HttpClientTransportConfig {
     #[validate(range(min = 1, max = 10))]
     #[serde(default = "HttpClientTransportConfig::default_connections")]
     connections: usize,
-
-    #[validate(range(min = 1))]
-    #[serde(default="default_transport_weight")]
-    connection_min_weight: u16,
-
-    #[validate(range(min = 1))]
-    #[serde(default="default_transport_weight")]
-    connection_max_weight: u16,
 }
 
 impl HttpClientTransportConfig {
@@ -63,7 +56,7 @@ impl HttpClientTransportConfig {
 pub struct HttpClientTransport {
     name: String,
     labels: TransportLabels,
-    connections: WeightedTransports<Connection>,
+    connections: TransportConnections<Connection>,
 }
 
 impl HttpClientTransport {
@@ -82,10 +75,6 @@ impl HttpClientTransport {
             Ok(DnsName::try_from(domain.to_owned())?)
         }).map_err(|e| format!("Invalid endpoint {:?}: {e}", config.endpoint))?;
 
-        if config.connection_min_weight > config.connection_max_weight {
-            return Err!("Invalid connection weight configuration");
-        }
-
         let roots = tls::load_roots().map_err(|e| format!(
             "Failed to load root certificates: {}", e))?;
 
@@ -101,7 +90,7 @@ impl HttpClientTransport {
             secret: config.secret.clone(),
         });
 
-        let mut connections = WeightedTransports::new();
+        let mut connections = TransportConnections::new();
 
         for id in 1..=config.connections {
             let connection_name = if config.connections > 1 {
@@ -112,12 +101,7 @@ impl HttpClientTransport {
 
             let stat = Arc::new(TransportConnectionStat::new(name, &connection_name));
             let connection = Arc::new(Connection::new(connection_name, connection_config.clone(), stat));
-
-            let weight = connections.add(connection.clone(), config.connection_min_weight, config.connection_max_weight).weight;
-            if config.connections > 1 {
-                // FIXME(konishchev): Rebalance periodically
-                debug!("[{}] connection #{id} is created with weight {weight}.", name);
-            }
+            assert!(connections.add(connection.clone()));
 
             let tunnel = tunnel.clone();
             tokio::spawn(async move {
@@ -140,11 +124,11 @@ impl Transport for HttpClientTransport {
     }
 
     fn direction(&self) -> TransportDirection {
-        self.connections.iter().next().unwrap().transport.direction()
+        self.connections.iter().next().unwrap().direction()
     }
 
     fn connected(&self) -> bool {
-        self.connections.iter().all(|weighted| weighted.transport.connected())
+        self.connections.iter().all(|connection| connection.connected())
     }
 
     fn ready_for_sending(&self) -> bool {
@@ -152,14 +136,14 @@ impl Transport for HttpClientTransport {
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
-        for weighted in self.connections.iter() {
-            weighted.transport.collect(encoder)?;
+        for connection in self.connections.iter() {
+            connection.collect(encoder)?;
         }
         Ok(())
     }
 
     async fn send(&self, packet: &mut [u8]) -> EmptyResult {
-        let connection = self.connections.select().ok_or(
+        let connection = self.connections.select(packet).ok_or(
             "There is no open connections")?;
 
         if self.connections.len() > 1 {
