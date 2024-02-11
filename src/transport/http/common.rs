@@ -1,4 +1,5 @@
 use std::marker::Unpin;
+use std::io::ErrorKind;
 use std::os::fd::{RawFd, BorrowedFd};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -6,6 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bitflags::bitflags;
 use bytes::{Bytes, BytesMut, Buf};
+use log::error;
 use prometheus_client::encoding::DescriptorEncoder;
 use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -193,13 +195,24 @@ pub fn pre_configure_hiddenlink_socket(connection: &TcpStream) -> EmptyResult {
     ))
 }
 
-// FIXME(konishchev): echo tcp_bbr > /etc/modules-load.d/bbr.conf +https://stackoverflow.com/questions/59265004/how-to-change-tcp-congestion-control-algorithm-using-setsockopt-call-from-chttps://stackoverflow.com/questions/59265004/how-to-change-tcp-congestion-control-algorithm-using-setsockopt-call-from-c
 pub fn post_configure_hiddenlink_socket(connection: &TcpStream) -> EmptyResult {
+    let socket = SockRef::from(connection);
+
+    // BBR should be better for transcontinental connections with periodic packet drops
+    if let Err(err) = socket.set_tcp_congestion("bbr".as_bytes()) {
+        if err.kind() != ErrorKind::NotFound {
+            return Err!("Failed to set TCP_CONGESTION socket option: {err}");
+        }
+        error!("Failed to enable BBR TCP congestion control algorithm for hiddenlink connection: tcp_bbr module is not loaded.");
+    }
+
     // When hiddenlink handshake is completed, all subsequent writes to the socket will contain actual packets, so
     // disable Nagle algorithm to not delay them. But please note that small packets can actually reveal our tunnel
     // when we use simplex HTTPS masking.
-    Ok(connection.set_nodelay(true).map_err(|e| format!(
-        "Failed to set TCP_NODELAY socket option: {e}"))?)
+    connection.set_nodelay(true).map_err(|e| format!(
+        "Failed to set TCP_NODELAY socket option: {e}"))?;
+
+    Ok(())
 }
 
 pub fn configure_socket_timeout(connection: &TcpStream, timeout: Duration, keep_alive: Option<TcpKeepalive>) -> EmptyResult {
