@@ -207,7 +207,7 @@ impl Controller {
 
     fn select_transport(&self) -> Option<&dyn MeteredTransport> {
         for transport in &self.transports {
-            if transport.is_ready() {
+            if transport.ready_for_sending() {
                 return Some(transport.as_ref());
             }
         }
@@ -220,7 +220,7 @@ impl Collector for Controller {
         self.tunnel.collect(&mut encoder)?;
 
         for transport in &self.transports {
-            let state = if transport.is_ready() {
+            let state = if transport.connected() {
                 "connected"
             } else {
                 "unavailable"

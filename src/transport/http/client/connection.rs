@@ -15,7 +15,7 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
 
 use crate::core::{GenericResult, EmptyResult};
-use crate::transport::{Transport, TransportConnectionStat};
+use crate::transport::{Transport, TransportDirection, TransportConnectionStat};
 use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter, pre_configure_hiddenlink_socket,
     post_configure_hiddenlink_socket};
 use crate::tunnel::Tunnel;
@@ -143,8 +143,26 @@ impl Transport for Connection {
         &self.name
     }
 
-    fn is_ready(&self) -> bool {
-        self.config.flags.contains(ConnectionFlags::EGRESS) && self.writer.is_ready()
+    fn direction(&self) -> TransportDirection {
+        let mut direction = TransportDirection::empty();
+
+        if self.config.flags.contains(ConnectionFlags::INGRESS) {
+            direction |= TransportDirection::INGRESS;
+        }
+
+        if self.config.flags.contains(ConnectionFlags::EGRESS) {
+            direction |= TransportDirection::EGRESS;
+        }
+
+        direction
+    }
+
+    fn connected(&self) -> bool {
+        self.writer.connected()
+    }
+
+    fn ready_for_sending(&self) -> bool {
+        self.config.flags.contains(ConnectionFlags::EGRESS) && self.writer.connected()
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {

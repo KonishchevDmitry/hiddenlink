@@ -14,7 +14,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::{constants, util};
 use crate::core::{GenericResult, EmptyResult};
-use crate::transport::{Transport, TransportConnectionStat};
+use crate::transport::{Transport, TransportDirection, TransportConnectionStat};
 
 pub const MIN_SECRET_LEN: usize = 10;
 
@@ -133,8 +133,16 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
         &self.name
     }
 
-    fn is_ready(&self) -> bool {
+    fn direction(&self) -> TransportDirection {
+        TransportDirection::EGRESS
+    }
+
+    fn connected(&self) -> bool {
         self.writer.lock().unwrap().is_some()
+    }
+
+    fn ready_for_sending(&self) -> bool {
+        self.connected()
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {

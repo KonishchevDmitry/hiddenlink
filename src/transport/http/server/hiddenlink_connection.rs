@@ -11,7 +11,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio_rustls::server::TlsStream;
 
 use crate::core::EmptyResult;
-use crate::transport::{Transport, TransportConnectionStat};
+use crate::transport::{Transport, TransportDirection, TransportConnectionStat};
 use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter};
 use crate::tunnel::Tunnel;
 use crate::util;
@@ -54,7 +54,7 @@ impl HiddenlinkConnection {
                 },
                 Err(err) => {
                     warn!("[{}]: {err}.", self.name);
-                    return;
+                    break;
                 }
             };
 
@@ -70,6 +70,7 @@ impl HiddenlinkConnection {
         }
 
         // FIXME(konishchev): Shutdown
+        self.writer.reset();
     }
 }
 
@@ -79,8 +80,26 @@ impl Transport for HiddenlinkConnection {
         &self.name
     }
 
-    fn is_ready(&self) -> bool {
-        self.flags.contains(ConnectionFlags::INGRESS) && self.writer.is_ready()
+    fn direction(&self) -> TransportDirection {
+        let mut direction = TransportDirection::empty();
+
+        if self.flags.contains(ConnectionFlags::INGRESS) {
+            direction |= TransportDirection::EGRESS;
+        }
+
+        if self.flags.contains(ConnectionFlags::EGRESS) {
+            direction |= TransportDirection::INGRESS;
+        }
+
+        direction
+    }
+
+    fn connected(&self) -> bool {
+        self.writer.connected()
+    }
+
+    fn ready_for_sending(&self) -> bool {
+        self.flags.contains(ConnectionFlags::INGRESS) && self.writer.ready_for_sending()
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {

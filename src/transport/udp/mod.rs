@@ -16,7 +16,7 @@ use validator::Validate;
 use crate::constants;
 use crate::core::{GenericResult, EmptyResult};
 use crate::metrics::{self, TransportLabels};
-use crate::transport::{Transport, MeteredTransport, TransportConnectionStat};
+use crate::transport::{Transport, TransportDirection, MeteredTransport, TransportConnectionStat};
 use crate::transport::udp::securer::UdpConnectionSecurer;
 use crate::tunnel::Tunnel;
 use crate::util;
@@ -259,9 +259,17 @@ impl Transport for UdpTransport {
         &self.name
     }
 
-    fn is_ready(&self) -> bool {
+    fn direction(&self) -> TransportDirection {
+        TransportDirection::all()
+    }
+
+    fn connected(&self) -> bool {
         let state = *self.state.lock().unwrap();
         state.connected()
+    }
+
+    fn ready_for_sending(&self) -> bool {
+        self.connected()
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {

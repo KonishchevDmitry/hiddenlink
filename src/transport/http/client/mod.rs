@@ -14,7 +14,7 @@ use validator::Validate;
 
 use crate::core::{GenericResult, GenericError, EmptyResult};
 use crate::metrics::{TransportLabels, self};
-use crate::transport::{Transport, MeteredTransport, WeightedTransports, TransportConnectionStat, default_transport_weight};
+use crate::transport::{Transport, TransportDirection, MeteredTransport, WeightedTransports, TransportConnectionStat, default_transport_weight};
 use crate::transport::http::client::connection::{Connection, ConnectionConfig};
 use crate::transport::http::common::{ConnectionFlags, MIN_SECRET_LEN};
 use crate::transport::http::tls;
@@ -138,8 +138,16 @@ impl Transport for HttpClientTransport {
         &self.name
     }
 
-    fn is_ready(&self) -> bool {
-        self.connections.is_ready()
+    fn direction(&self) -> TransportDirection {
+        self.connections.iter().next().unwrap().transport.direction()
+    }
+
+    fn connected(&self) -> bool {
+        self.connections.iter().all(|weighted| weighted.transport.connected())
+    }
+
+    fn ready_for_sending(&self) -> bool {
+        self.connections.ready_for_sending()
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {

@@ -2,6 +2,7 @@ use std::os::fd::AsFd;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bitflags::bitflags;
 use itertools::Itertools;
 use log::error;
 use prometheus_client::{
@@ -19,10 +20,20 @@ use crate::util;
 pub mod http;
 pub mod udp;
 
+bitflags! {
+    #[derive(Clone, Copy)]
+    pub struct TransportDirection: usize {
+        const INGRESS = 1 << 0;
+        const EGRESS  = 1 << 1;
+    }
+}
+
 #[async_trait]
 pub trait Transport: Send + Sync {
     fn name(&self) -> &str;
-    fn is_ready(&self) -> bool;
+    fn direction(&self) -> TransportDirection;
+    fn connected(&self) -> bool;
+    fn ready_for_sending(&self) -> bool;
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result;
     async fn send(&self, packet: &mut [u8]) -> EmptyResult;
 }
@@ -62,8 +73,8 @@ impl<T: Transport + ?Sized> WeightedTransports<T> {
         self.transports.len()
     }
 
-    pub fn is_ready(&self) -> bool {
-        self.transports.iter().any(|weighted| weighted.transport.is_ready())
+    pub fn ready_for_sending(&self) -> bool {
+        self.transports.iter().any(|weighted| weighted.transport.ready_for_sending())
     }
 
     pub fn iter(&self) -> impl Iterator<Item=&WeightedTransport<T>> {
@@ -76,7 +87,7 @@ impl<T: Transport + ?Sized> WeightedTransports<T> {
         let mut total_weight = 0u32;
 
         for transport in &self.transports {
-            if transport.transport.is_ready() {
+            if transport.transport.ready_for_sending() {
                 ready_transports.push(transport);
                 total_weight += u32::from(transport.weight);
             }

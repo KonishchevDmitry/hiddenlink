@@ -21,7 +21,7 @@ use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::metrics::{self, TransportLabels};
-use crate::transport::{Transport, MeteredTransport, WeightedTransports, TransportConnectionStat};
+use crate::transport::{Transport, TransportDirection, MeteredTransport, WeightedTransports, TransportConnectionStat};
 use crate::transport::http::common::MIN_SECRET_LEN;
 use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
 use crate::transport::http::server::server_connection::ServerConnection;
@@ -173,8 +173,25 @@ impl Transport for HttpServerTransport {
         &self.name
     }
 
-    fn is_ready(&self) -> bool {
-        self.connections.lock().unwrap().active.is_ready()
+    fn direction(&self) -> TransportDirection {
+        TransportDirection::all()
+    }
+
+    fn connected(&self) -> bool {
+        let mut directions = TransportDirection::empty();
+
+        for weighted in self.connections.lock().unwrap().active.iter() {
+            let transport = &weighted.transport;
+            if transport.connected() {
+                directions |= transport.direction();
+            }
+        }
+
+        directions.contains(self.direction())
+    }
+
+    fn ready_for_sending(&self) -> bool {
+        self.connections.lock().unwrap().active.ready_for_sending()
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
