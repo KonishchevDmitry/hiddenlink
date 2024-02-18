@@ -1,22 +1,22 @@
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use log::{trace, info, warn, error};
 use prometheus_client::encoding::DescriptorEncoder;
+use rand::{Rng, distributions::{Alphanumeric, Distribution}};
 use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
-use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
-use tokio::time;
+use tokio::time::{self, Instant, Duration};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
 
-use crate::core::{GenericResult, EmptyResult};
+use crate::core::{EmptyResult, GenericResult};
 use crate::transport::{Transport, TransportDirection};
-use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter, pre_configure_hiddenlink_socket,
+use crate::transport::http::common::{self, ConnectionFlags, PacketReader, PacketWriter, pre_configure_hiddenlink_socket,
     post_configure_hiddenlink_socket};
 use crate::transport::stat::TransportConnectionStat;
 use crate::tunnel::Tunnel;
@@ -49,8 +49,16 @@ impl Connection {
 
     // FIXME(konishchev): Connection TTL?
     pub async fn handle(&self, tunnel: Arc<Tunnel>) {
+        let mut next_reconnect = Instant::now();
+
         loop {
-            match self.process_connect().await {
+            next_reconnect += Duration::from_secs(3);
+
+            let result = tokio::time::timeout(
+                common::CONNECTION_TIMEOUT, self.process_connect()
+            ).await.unwrap_or_else(|_| Err!("The connection has timed out"));
+
+            match result {
                 Ok(connection) => {
                     let fd = connection.as_raw_fd();
                     let (reader, writer) = tokio::io::split(connection);
@@ -58,16 +66,18 @@ impl Connection {
                     self.process_connection(reader, tunnel.clone()).await;
                 },
                 Err(err) => {
-                    warn!("[{}] Failed to establish hiddenlink connection: {err}", self.name);
+                    warn!("[{}] Failed to establish hiddenlink connection: {err}.", self.name);
                 },
-            };
+            }
 
             self.writer.reset();
 
-            // FIXME(konishchev): Exponential backoff / randomization?
-            let timeout = Duration::from_secs(3);
-            info!("[{}] Reconnecting in {timeout:?}...", self.name);
-            time::sleep(timeout).await;
+            let nearest_reconnect_at = Instant::now() + Duration::from_secs(1);
+            if next_reconnect < nearest_reconnect_at {
+                next_reconnect = nearest_reconnect_at;
+            }
+
+            time::sleep_until(next_reconnect).await;
         }
     }
 
@@ -93,17 +103,32 @@ impl Connection {
     }
 
     async fn process_handshake(&self, connection: &mut ClientTlsStream<TcpStream>) -> EmptyResult {
-        // FIXME(konishchev): Send random payload to mimic HTTP client request
+        let name_len: u8 = self.name.len().try_into().map_err(|_| "Transport name is too long")?;
+        let fake_http_request_size: u16 = rand::thread_rng().gen_range(100..=2000);
 
-        let name = self.name.as_bytes();
-        let name_len: u8 = name.len().try_into().map_err(|_| "Transport name is too long")?;
+        let mut request = BytesMut::new();
+        request.put_slice(self.config.secret.as_bytes());
+        request.put_u8(self.config.flags.bits());
+        request.put_u8(name_len);
+        request.put_u16(fake_http_request_size); // Send random payload to mimic HTTP request
+        request.put_slice(self.name.as_bytes());
+        request.extend(Alphanumeric.sample_iter(rand::thread_rng()).take(fake_http_request_size.into()));
+        request.put_slice(common::HEADER_SUFFIX);
+        connection.write_all(&request).await?;
 
-        connection.write_all(self.config.secret.as_bytes()).await?;
-        connection.write_u8(self.config.flags.bits()).await?;
-        connection.write_u8(name_len).await?;
-        connection.write_all(name).await?;
+        let mut fake_http_response_size: [u8; 2] = [0; 2];
+        connection.read_exact(&mut fake_http_response_size).await?;
+        let response_size: usize = usize::from(u16::from_be_bytes(fake_http_response_size)) + common::HEADER_SUFFIX.len();
+
+        let mut response = BytesMut::with_capacity(response_size);
+        unsafe { response.advance_mut(response_size); }
+        connection.read_exact(&mut response).await?;
+
+        if !response.ends_with(common::HEADER_SUFFIX) {
+            return Err!("Protocol violation error");
+        }
+
         post_configure_hiddenlink_socket(connection.get_ref().0)?;
-
         Ok(())
     }
 

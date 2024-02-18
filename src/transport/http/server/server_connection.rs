@@ -1,24 +1,22 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use log::{trace, warn};
+use rand::{Rng, distributions::{Alphanumeric, Distribution}};
 use rustls::ClientConfig;
 use rustls::server::Acceptor;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::error::Elapsed;
 use tokio_rustls::LazyConfigAcceptor;
 use tokio_rustls::server::TlsStream;
 
 use crate::core::{GenericResult, ResultTools};
-use crate::transport::http::common::{ConnectionFlags, configure_socket_timeout, pre_configure_hiddenlink_socket,
+use crate::transport::http::common::{self, ConnectionFlags, configure_socket_timeout, pre_configure_hiddenlink_socket,
     post_configure_hiddenlink_socket};
 use crate::transport::http::server::proxied_connection::ProxiedConnection;
 use crate::transport::http::tls::TlsDomains;
-
-const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);  // Standard nginx timeout
 
 pub struct ServerConnection {
     name: String,
@@ -48,7 +46,7 @@ impl ServerConnection {
 
     pub async fn handle(self, tcp_connection: TcpStream) -> Option<HiddenlinkConnectionRequest> {
         let process_handshake = tokio::time::timeout(
-            CONNECTION_TIMEOUT,
+            common::CONNECTION_TIMEOUT,
             self.process_handshake(tcp_connection));
 
         let decision = process_handshake.await.ok_or_handle_error(|_err: Elapsed| {
@@ -121,12 +119,7 @@ impl ServerConnection {
 
     async fn process_routing_decision(&self, mut connection: TlsStream<TcpStream>, upstream_domain: &str) -> GenericResult<RoutingDecision> {
         let secret = self.secret.as_bytes();
-
-        let mut buf = BytesMut::with_capacity(
-            secret.len()
-            + Self::HIDDENLINK_STATIC_HEADER_SIZE
-            + usize::from(u8::MAX) // name
-        );
+        let mut buf = BytesMut::with_capacity(secret.len() + Self::HIDDENLINK_STATIC_HEADER_SIZE);
 
         loop {
             let size = connection.read_buf(&mut buf).await?;
@@ -142,7 +135,7 @@ impl ServerConnection {
             }
         }
 
-        configure_socket_timeout(connection.get_ref().0, CONNECTION_TIMEOUT, None)?;
+        configure_socket_timeout(connection.get_ref().0, common::CONNECTION_TIMEOUT, None)?;
 
         Ok(RoutingDecision::Proxy {
             preread_data: buf.freeze(),
@@ -151,7 +144,7 @@ impl ServerConnection {
         })
     }
 
-    const HIDDENLINK_STATIC_HEADER_SIZE: usize = 2; // flags + name len
+    const HIDDENLINK_STATIC_HEADER_SIZE: usize = 1 + 1 + 2; // flags + name length + HTTP request size
 
     async fn process_hiddenlink_handshake(&self, mut connection: TlsStream<TcpStream>, mut buf: BytesMut) -> GenericResult<RoutingDecision> {
         let mut index = self.secret.len();
@@ -165,13 +158,17 @@ impl ServerConnection {
         let raw_flags = buf[index];
         index += 1;
 
-        let flags = ConnectionFlags::from_bits(raw_flags).ok_or_else(|| format!(
-            "Invalid connection flags: {raw_flags:08b}"))?;
-
         let name_len: usize = buf[index].into();
         index += 1;
 
-        while buf.len() < index + name_len {
+        let fake_http_request_size: usize = u16::from_be_bytes(buf[index..index + 2].try_into().unwrap()).into();
+        index += 2;
+
+        let handshake_size = index + name_len + fake_http_request_size + common::HEADER_SUFFIX.len();
+
+        while buf.len() < handshake_size {
+            buf.reserve(handshake_size - buf.len());
+
             if connection.read_buf(&mut buf).await? == 0 {
                 return Err!("Got an unexpected EOF");
             }
@@ -179,6 +176,15 @@ impl ServerConnection {
 
         let raw_name = &buf[index..index + name_len];
         index += name_len;
+        index += fake_http_request_size;
+
+        if &buf[index..index + common::HEADER_SUFFIX.len()] != common::HEADER_SUFFIX {
+            return Err!("Protocol violation error");
+        }
+        index += common::HEADER_SUFFIX.len();
+
+        let flags = ConnectionFlags::from_bits(raw_flags).ok_or_else(|| format!(
+            "Invalid connection flags: {raw_flags:08b}"))?;
 
         let name = String::from_utf8(raw_name.into())
             .ok().and_then(|name| {
@@ -191,6 +197,15 @@ impl ServerConnection {
                 }
             })
             .ok_or_else(|| format!("Got an invalid connection name: {:?}", String::from_utf8_lossy(raw_name)))?;
+
+        // Send random payload to mimic HTTP response
+        let fake_http_response_size: u16 = rand::thread_rng().gen_range(70..=350);
+
+        let mut response = BytesMut::new();
+        response.put_u16(fake_http_response_size);
+        response.extend(Alphanumeric.sample_iter(rand::thread_rng()).take(fake_http_response_size.into()));
+        response.put_slice(common::HEADER_SUFFIX);
+        connection.write_all(&response).await?;
 
         let tcp_connection = connection.get_ref().0;
         pre_configure_hiddenlink_socket(tcp_connection)
