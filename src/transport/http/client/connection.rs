@@ -28,6 +28,8 @@ pub struct ConnectionConfig {
     pub client_config: Arc<ClientConfig>,
     pub flags: ConnectionFlags,
     pub secret: String,
+    pub min_ttl: Duration,
+    pub max_ttl: Option<Duration>,
 }
 
 pub struct Connection {
@@ -48,7 +50,7 @@ impl Connection {
     }
 
     // FIXME(konishchev): Connection TTL?
-    pub async fn handle(&self, tunnel: Arc<Tunnel>) {
+    pub async fn handle(self: Arc<Connection>, tunnel: Arc<Tunnel>) {
         let mut next_reconnect = Instant::now();
 
         loop {

@@ -13,5 +13,6 @@ transports:
   - type: http-client
     endpoint: server.lan:4000
     secret: GET /secret
+    connection_max_ttl: 10s
 
 metrics_bind_address: 127.0.0.1:3001
