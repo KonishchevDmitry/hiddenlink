@@ -10,6 +10,7 @@ use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
+use tokio::task::JoinHandle;
 use tokio::time::{self, Instant, Duration};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
@@ -49,30 +50,65 @@ impl Connection {
         }
     }
 
-    // FIXME(konishchev): Connection TTL?
     pub async fn handle(self: Arc<Connection>, tunnel: Arc<Tunnel>) {
+        let mut current_connection_id: usize = 0;
+        let mut previous_connection: Option<(String, JoinHandle<()>)> = None;
         let mut next_reconnect = Instant::now();
 
         loop {
+            current_connection_id += 1;
             next_reconnect += Duration::from_secs(3);
 
+            let current_connection_name = format!("{}#{}", self.name, current_connection_id);
             let result = tokio::time::timeout(
-                common::CONNECTION_TIMEOUT, self.process_connect()
+                common::CONNECTION_TIMEOUT, self.process_connect(&current_connection_name)
             ).await.unwrap_or_else(|_| Err!("The connection has timed out"));
 
             match result {
                 Ok(connection) => {
+                    let ttl = self.config.max_ttl.map(|max_ttl| {
+                        let ttl = rand::thread_rng().gen_range(self.config.min_ttl..=max_ttl);
+                        trace!("[{}] Set connection TTL to {ttl:?}.", current_connection_name);
+                        ttl
+                    });
+
                     let fd = connection.as_raw_fd();
                     let (reader, writer) = tokio::io::split(connection);
-                    self.writer.replace(fd, writer);
-                    self.process_connection(reader, tunnel.clone()).await;
+                    let (writer_handle, previous_connection_shutdown) = self.writer.replace(&current_connection_name, fd, writer);
+
+                    let mut connection_task = {
+                        let name = current_connection_name.clone();
+                        let client = self.clone();
+                        let tunnel = tunnel.clone();
+
+                        tokio::spawn(async move {
+                            let graceful_shutdown = client.process_connection(&name, reader, tunnel).await;
+                            client.writer.close_matching(writer_handle, graceful_shutdown).await
+                        })
+                    };
+
+                    if let Some(previous_connection_shutdown) = previous_connection_shutdown {
+                        previous_connection_shutdown.await.unwrap();
+                    }
+
+                    let expired = match ttl {
+                        Some(ttl) => tokio::time::timeout(ttl, &mut connection_task).await.ok(),
+                        None => Some((&mut connection_task).await),
+                    }.is_none();
+
+                    if let Some((name, task)) = previous_connection.take() {
+                        self.close_previous_connection(&name, task).await;
+                    }
+
+                    if expired {
+                        trace!("[{}] Connection TTL has expired. Spawning new connection...", current_connection_name);
+                        previous_connection.replace((current_connection_name, connection_task));
+                    }
                 },
                 Err(err) => {
-                    warn!("[{}] Failed to establish hiddenlink connection: {err}.", self.name);
+                    warn!("[{}] Failed to establish hiddenlink connection: {err}.", current_connection_name);
                 },
             }
-
-            self.writer.reset();
 
             let nearest_reconnect_at = Instant::now() + Duration::from_secs(1);
             if next_reconnect < nearest_reconnect_at {
@@ -83,9 +119,9 @@ impl Connection {
         }
     }
 
-    async fn process_connect(&self) -> GenericResult<ClientTlsStream<TcpStream>> {
+    async fn process_connect(&self, name: &str) -> GenericResult<ClientTlsStream<TcpStream>> {
         let endpoint = &self.config.endpoint;
-        trace!("[{}] Establishing new connection to {}...", self.name, endpoint);
+        info!("[{}] Establishing new connection to {}...", name, endpoint);
 
         let tcp_connection = TcpStream::connect(endpoint).await.map_err(|e| format!(
             "Unable to connect: {e}"))?;
@@ -100,7 +136,7 @@ impl Connection {
         self.process_handshake(&mut tls_connection).await.map_err(|e| format!(
             "Hiddenlink handshake failed: {e}"))?;
 
-        trace!("[{}] Connected.", self.name);
+        info!("[{}] Connected.", name);
         Ok(tls_connection)
     }
 
@@ -134,25 +170,25 @@ impl Connection {
         Ok(())
     }
 
-    async fn process_connection(&self, connection: ReadHalf<ClientTlsStream<TcpStream>>, tunnel: Arc<Tunnel>) {
+    async fn process_connection(&self, name: &str, connection: ReadHalf<ClientTlsStream<TcpStream>>, tunnel: Arc<Tunnel>) -> bool {
         let mut packet_reader = PacketReader::new(Bytes::new(), connection, self.stat.clone());
 
         loop {
             let packet = match packet_reader.read().await {
                 Ok(Some(packet)) => packet,
                 Ok(None) => {
-                    info!("[{}]: Server has closed the connection.", self.name);
+                    info!("[{}]: Server has closed the connection.", name);
                     break;
                 },
                 Err(err) => {
-                    warn!("[{}]: {err}.", self.name);
-                    return;
+                    warn!("[{}]: {err}.", name);
+                    return false;
                 }
             };
 
-            util::trace_packet(&self.name, packet);
+            util::trace_packet(name, packet);
             if !self.config.flags.contains(ConnectionFlags::INGRESS) {
-                error!("[{}] Got a packet from non-ingress connection.", self.name);
+                error!("[{}] Got a packet from non-ingress connection.", name);
                 continue;
             }
 
@@ -161,7 +197,28 @@ impl Connection {
             }
         }
 
-        // FIXME(konishchev): Shutdown
+        true
+    }
+
+    async fn close_previous_connection(&self, name: &str, task: JoinHandle<()>) {
+        if task.is_finished() {
+            return
+        }
+
+        trace!("[{}] The connection handler is not terminated yet. Killing it...", name);
+        task.abort();
+
+        match task.await {
+            Ok(_) => {
+                trace!("[{}] The connection handler has finished its execution.", name);
+            },
+            Err(err) => {
+                if let Ok(reason) = err.try_into_panic() {
+                    std::panic::resume_unwind(reason);
+                }
+                trace!("[{}] The connection handler has been killed.", name);
+            },
+        }
     }
 }
 

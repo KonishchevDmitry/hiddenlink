@@ -43,9 +43,11 @@ pub struct HttpClientTransportConfig {
     #[serde(default = "HttpClientTransportConfig::default_connections")]
     connections: usize,
 
+    #[serde(default)]
     #[serde(with = "humantime_serde")]
     connection_min_ttl: Option<Duration>,
 
+    #[serde(default)]
     #[serde(with = "humantime_serde")]
     connection_max_ttl: Option<Duration>,
 }

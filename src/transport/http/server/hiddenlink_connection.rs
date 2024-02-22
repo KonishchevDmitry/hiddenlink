@@ -33,7 +33,7 @@ impl HiddenlinkConnection {
         let (read_half, write_half) = tokio::io::split(connection);
 
         let writer = PacketWriter::new(name.clone(), stat.clone());
-        writer.replace(fd, write_half);
+        writer.replace(&name, fd, write_half);
 
         HiddenlinkConnection {
             name,
@@ -46,16 +46,16 @@ impl HiddenlinkConnection {
     pub async fn handle(&self, tunnel: Arc<Tunnel>) {
         let mut packet_reader = self.packet_reader.lock().await;
 
-        loop {
+        let shutdown = loop {
             let packet = match packet_reader.read().await {
                 Ok(Some(packet)) => packet,
                 Ok(None) => {
                     info!("[{}]: Client has closed the connection.", self.name);
-                    break;
+                    break true;
                 },
                 Err(err) => {
                     warn!("[{}]: {err}.", self.name);
-                    break;
+                    break false;
                 }
             };
 
@@ -68,10 +68,10 @@ impl HiddenlinkConnection {
             if let Err(err) = tunnel.send(packet).await {
                 error!("[{}] {err}.", self.name);
             }
-        }
+        };
 
-        // FIXME(konishchev): Shutdown
-        self.writer.reset();
+        // FIXME(konishchev): Send random payload?
+        self.writer.close(shutdown).await;
     }
 }
 

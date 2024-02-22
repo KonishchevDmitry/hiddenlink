@@ -13,6 +13,7 @@ use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::task::JoinHandle;
 
 use crate::{constants, util};
 use crate::core::{GenericResult, EmptyResult};
@@ -104,13 +105,13 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
     }
 }
 
-pub struct PacketWriter<C: AsyncWriteExt + Send + Sync + Unpin> {
+pub struct PacketWriter<C: AsyncWriteExt + Send + Sync + Unpin + 'static> {
     name: String,
     writer: Mutex<Option<Arc<PacketWriterConnection<C>>>>,
     stat: Arc<TransportConnectionStat>,
 }
 
-impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
+impl<C: AsyncWriteExt + Send + Sync + Unpin + 'static> PacketWriter<C> {
     pub fn new(name: String, stat: Arc<TransportConnectionStat>) -> PacketWriter<C> {
         PacketWriter {
             name,
@@ -119,16 +120,45 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
         }
     }
 
-    pub fn replace(&self, fd: RawFd, connection: C) {
-        self.writer.lock().unwrap().replace(Arc::new(PacketWriterConnection {
+    pub fn replace(&self, name: &str, fd: RawFd, connection: C) -> (Arc<PacketWriterConnection<C>>, Option<JoinHandle<()>>) {
+        let connection = Arc::new(PacketWriterConnection {
             fd,
+            name: name.to_owned(),
             connection: AsyncMutex::new(connection),
-        }));
+        });
+
+        let previous_connection = self.writer.lock().unwrap().replace(connection.clone());
+
+        (connection, previous_connection.map(|connection| {
+            tokio::spawn(async move {
+                connection.shutdown().await;
+            })
+        }))
     }
 
-    pub fn reset(&self) {
-        // FIXME(konishchev): Shutdown
-        self.writer.lock().unwrap().take();
+    pub async fn close_matching(&self, handle: Arc<PacketWriterConnection<C>>, shutdown: bool) {
+        let writer = {
+            let mut writer = self.writer.lock().unwrap();
+
+            match *writer {
+                Some(ref current) if Arc::ptr_eq(current, &handle) => writer.take().unwrap(),
+                _ => return,
+            }
+        };
+
+        if shutdown {
+            writer.shutdown().await;
+        }
+    }
+
+    pub async fn close(&self, shutdown: bool) {
+        let writer = self.writer.lock().unwrap().take();
+
+        if let Some(writer) = writer {
+            if shutdown {
+                writer.shutdown().await;
+            }
+        }
     }
  }
 
@@ -151,9 +181,12 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
     }
 
     fn collect(&self, encoder: &mut DescriptorEncoder) -> std::fmt::Result {
-        if let Some(writer) = self.writer.lock().unwrap().clone() {
+        let writer = self.writer.lock().unwrap().clone();
+
+        if let Some(writer) = writer {
             self.stat.collect_tcp_socket(encoder, &writer.fd())?;
         }
+
         Ok(())
     }
 
@@ -164,6 +197,8 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
             "Connection is closed"
         })?.clone();
 
+        // FIXME(konishchev): ECONNRESET?
+        // FIXME(konishchev): Shutdown races
         writer.connection.lock().await.write_all(packet).await.map_err(|e| {
             self.stat.on_packet_dropped();
             e
@@ -175,15 +210,22 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin> PacketWriter<C> {
     }
 }
 
-struct PacketWriterConnection<C> {
+pub struct PacketWriterConnection<C: AsyncWriteExt + Unpin> {
     fd: RawFd,
+    name: String,
     connection: AsyncMutex<C>,
 }
 
-impl<C> PacketWriterConnection<C> {
+impl<C: AsyncWriteExt + Unpin> PacketWriterConnection<C> {
     fn fd(&self) -> BorrowedFd {
         unsafe {
             BorrowedFd::borrow_raw(self.fd)
+        }
+    }
+
+    async fn shutdown(&self) {
+        if let Err(err) = self.connection.lock().await.shutdown().await {
+            error!("[{}] Failed to shutdown the socket: {err}.", self.name);
         }
     }
 }

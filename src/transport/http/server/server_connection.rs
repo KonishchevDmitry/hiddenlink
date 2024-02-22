@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::{BufMut, Bytes, BytesMut};
-use log::{trace, warn};
+use log::{trace, info, warn};
 use rand::{Rng, distributions::{Alphanumeric, Distribution}};
 use rustls::ClientConfig;
 use rustls::server::Acceptor;
@@ -55,7 +55,7 @@ impl ServerConnection {
 
         let hiddenlink_connection_request = match decision? {
             RoutingDecision::Hiddenlink(request) => {
-                trace!("[{}] The client has passed hiddenlink handshake as {:?}.", self.name, request.name);
+                info!("[{}] The client has passed hiddenlink handshake as {:?}.", self.name, request.name);
                 request
             },
             RoutingDecision::Proxy {preread_data, connection, upstream_domain} => {
