@@ -78,7 +78,7 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
                     Some(preread_data) => {
                         let read_size = std::cmp::min(required_size - self.data_size, preread_data.len());
 
-                        (&mut self.buf[self.data_size..self.data_size + read_size]).copy_from_slice(&preread_data[..read_size]);
+                        self.buf[self.data_size..self.data_size + read_size].copy_from_slice(&preread_data[..read_size]);
                         preread_data.advance(read_size);
                         if preread_data.is_empty() {
                             self.preread_data = None;
