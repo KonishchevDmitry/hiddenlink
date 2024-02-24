@@ -7,7 +7,7 @@ use log::{info, warn, error};
 use prometheus_client::encoding::DescriptorEncoder;
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, oneshot};
 use tokio_rustls::server::TlsStream;
 
 use crate::core::EmptyResult;
@@ -31,15 +31,16 @@ impl HiddenlinkConnection {
     ) -> HiddenlinkConnection {
         let fd = connection.as_raw_fd();
         let (read_half, write_half) = tokio::io::split(connection);
+        let (error_sender, error_receiver) = oneshot::channel();
 
         let writer = PacketWriter::new(name.clone(), stat.clone());
-        writer.replace(&name, fd, write_half);
+        writer.replace(&name, fd, write_half, error_sender);
 
         HiddenlinkConnection {
             name,
             flags,
             writer,
-            packet_reader: AsyncMutex::new(PacketReader::new(preread_data, read_half, stat)),
+            packet_reader: AsyncMutex::new(PacketReader::new(preread_data, read_half, error_receiver, stat)),
         }
     }
 

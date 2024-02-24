@@ -13,6 +13,7 @@ use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::oneshot::{Receiver, Sender};
 use tokio::task::JoinHandle;
 
 use crate::{constants, util};
@@ -35,6 +36,7 @@ bitflags! {
 pub struct PacketReader<C: AsyncReadExt + Unpin> {
     buf: BytesMut,
     connection: C,
+    error_receiver: Receiver<String>,
     state: PacketReaderState,
     stat: Arc<TransportConnectionStat>,
 }
@@ -45,13 +47,14 @@ enum PacketReaderState {
 }
 
 impl<C: AsyncReadExt + Unpin> PacketReader<C> {
-    pub fn new(preread_data: Bytes, connection: C, stat: Arc<TransportConnectionStat>) -> PacketReader<C> {
+    pub fn new(preread_data: Bytes, connection: C, error_receiver: Receiver<String>, stat: Arc<TransportConnectionStat>) -> PacketReader<C> {
         let mut buf = BytesMut::new(); // FIXME(konishchev): Set initial capacity
         buf.extend(&preread_data);
 
         PacketReader {
             buf,
             connection,
+            error_receiver,
             state: PacketReaderState::ReadSize{to_drop: 0},
             stat,
         }
@@ -71,8 +74,15 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
             while self.buf.len() < data_size {
                 self.buf.reserve(max_size - self.buf.len());
 
-                let read_size = self.connection.read_buf(&mut self.buf).await.map_err(|e| format!(
-                    "Connection is broken: {e}"))?;
+                let read_size = tokio::select! {
+                    biased;
+
+                    result = self.connection.read_buf(&mut self.buf) => result,
+
+                    Ok(result) = &mut self.error_receiver => {
+                        return Err(result.into());
+                    },
+                }.map_err(|e| format!("Connection is broken: {e}"))?;
 
                 if read_size == 0 {
                     if self.buf.is_empty() {
@@ -120,11 +130,14 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin + 'static> PacketWriter<C> {
         }
     }
 
-    pub fn replace(&self, name: &str, fd: RawFd, connection: C) -> (Arc<PacketWriterConnection<C>>, Option<JoinHandle<()>>) {
+    pub fn replace(&self, name: &str, fd: RawFd, connection: C, error_sender: Sender<String>) -> (Arc<PacketWriterConnection<C>>, Option<JoinHandle<()>>) {
         let connection = Arc::new(PacketWriterConnection {
             fd,
             name: name.to_owned(),
-            connection: AsyncMutex::new(connection),
+            connection: AsyncMutex::new(PacketWriterConnectionHandle {
+                socket: connection,
+                error_sender: Some(error_sender),
+            }),
         });
 
         let previous_connection = self.writer.lock().unwrap().replace(connection.clone());
@@ -192,17 +205,24 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin + 'static> PacketWriter<C> {
 
     // FIXME(konishchev): Check socket buffers?
     async fn send(&self, packet: &mut [u8]) -> EmptyResult {
-        let writer = self.writer.lock().unwrap().as_ref().ok_or_else(|| {
+        let writer = self.writer.lock().unwrap().clone();
+
+        let writer = writer.ok_or_else(|| {
             self.stat.on_packet_dropped();
             "Connection is closed"
-        })?.clone();
-
-        // FIXME(konishchev): ECONNRESET?
-        // FIXME(konishchev): Shutdown races
-        writer.connection.lock().await.write_all(packet).await.map_err(|e| {
-            self.stat.on_packet_dropped();
-            e
         })?;
+
+        {
+            let mut connection = writer.connection.lock().await;
+            if connection.error_sender.is_none() {
+                return Err!("Connection is closed");
+            }
+
+            connection.socket.write_all(packet).await.inspect_err(|e| {
+                let _ = connection.error_sender.take().unwrap().send(format!("The connection is broken: {e}"));
+                self.stat.on_packet_dropped();
+            })?;
+        }
 
         self.stat.on_packet_sent(packet);
         // FIXME(konishchev): ioctl_siocoutq: 84 -> 106
@@ -213,7 +233,7 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin + 'static> PacketWriter<C> {
 pub struct PacketWriterConnection<C: AsyncWriteExt + Unpin> {
     fd: RawFd,
     name: String,
-    connection: AsyncMutex<C>,
+    connection: AsyncMutex<PacketWriterConnectionHandle<C>>,
 }
 
 impl<C: AsyncWriteExt + Unpin> PacketWriterConnection<C> {
@@ -225,8 +245,29 @@ impl<C: AsyncWriteExt + Unpin> PacketWriterConnection<C> {
 
     async fn shutdown(&self) {
         if let Err(err) = self.connection.lock().await.shutdown().await {
-            error!("[{}] Failed to shutdown the socket: {err}.", self.name);
+            error!("[{}] {err}.", self.name);
         }
+    }
+}
+
+struct PacketWriterConnectionHandle<C: AsyncWriteExt + Unpin> {
+    socket: C,
+    error_sender: Option<Sender<String>>,
+}
+
+impl<C: AsyncWriteExt + Unpin> PacketWriterConnectionHandle<C> {
+    async fn shutdown(&mut self) -> EmptyResult {
+        let Some(error_sender) = self.error_sender.take() else {
+            return Ok(());
+        };
+
+        if let Err(err) = self.socket.shutdown().await {
+            if err.kind() != ErrorKind::NotConnected {
+                error_sender.send(format!("Failed to shutdown the socket: {err}"))?;
+            }
+        }
+
+        Ok(())
     }
 }
 

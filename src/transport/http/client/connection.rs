@@ -10,6 +10,7 @@ use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
+use tokio::sync::oneshot::{self, Receiver};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant, Duration};
 use tokio_rustls::TlsConnector;
@@ -59,22 +60,18 @@ impl Connection {
             current_connection_id += 1;
             next_reconnect += Duration::from_secs(3);
 
-            let current_connection_name = format!("{}#{}", self.name, current_connection_id);
+            let current_connection_name = format!("{}|#{}", self.name, current_connection_id);
             let result = tokio::time::timeout(
                 common::CONNECTION_TIMEOUT, self.process_connect(&current_connection_name)
             ).await.unwrap_or_else(|_| Err!("The connection has timed out"));
 
             match result {
-                Ok(connection) => {
-                    let ttl = self.config.max_ttl.map(|max_ttl| {
-                        let ttl = rand::thread_rng().gen_range(self.config.min_ttl..=max_ttl);
-                        trace!("[{}] Set connection TTL to {ttl:?}.", current_connection_name);
-                        ttl
-                    });
-
+                Ok((connection, ttl)) => {
                     let fd = connection.as_raw_fd();
                     let (reader, writer) = tokio::io::split(connection);
-                    let (writer_handle, previous_connection_shutdown) = self.writer.replace(&current_connection_name, fd, writer);
+                    let (error_sender, error_receiver) = oneshot::channel();
+                    let (writer_handle, previous_connection_shutdown) = self.writer.replace(
+                        &current_connection_name, fd, writer, error_sender);
 
                     let mut connection_task = {
                         let name = current_connection_name.clone();
@@ -82,7 +79,7 @@ impl Connection {
                         let tunnel = tunnel.clone();
 
                         tokio::spawn(async move {
-                            let graceful_shutdown = client.process_connection(&name, reader, tunnel).await;
+                            let graceful_shutdown = client.process_connection(&name, reader, error_receiver, tunnel).await;
                             client.writer.close_matching(writer_handle, graceful_shutdown).await
                         })
                     };
@@ -119,9 +116,9 @@ impl Connection {
         }
     }
 
-    async fn process_connect(&self, name: &str) -> GenericResult<ClientTlsStream<TcpStream>> {
+    async fn process_connect(&self, name: &str) -> GenericResult<(ClientTlsStream<TcpStream>, Option<Duration>)> {
         let endpoint = &self.config.endpoint;
-        info!("[{}] Establishing new connection to {}...", name, endpoint);
+        info!("[{name}] Establishing new connection to {endpoint}...");
 
         let tcp_connection = TcpStream::connect(endpoint).await.map_err(|e| format!(
             "Unable to connect: {e}"))?;
@@ -136,8 +133,16 @@ impl Connection {
         self.process_handshake(&mut tls_connection).await.map_err(|e| format!(
             "Hiddenlink handshake failed: {e}"))?;
 
-        info!("[{}] Connected.", name);
-        Ok(tls_connection)
+        let ttl = self.config.max_ttl.map(|max_ttl| {
+            let ttl = rand::thread_rng().gen_range(self.config.min_ttl..=max_ttl);
+            info!("[{name}] Connected (TTL={ttl:.0?}).");
+            ttl
+        }).or_else(|| {
+            info!("[{name}] Connected.");
+            None
+        });
+
+        Ok((tls_connection, ttl))
     }
 
     async fn process_handshake(&self, connection: &mut ClientTlsStream<TcpStream>) -> EmptyResult {
@@ -170,8 +175,11 @@ impl Connection {
         Ok(())
     }
 
-    async fn process_connection(&self, name: &str, connection: ReadHalf<ClientTlsStream<TcpStream>>, tunnel: Arc<Tunnel>) -> bool {
-        let mut packet_reader = PacketReader::new(Bytes::new(), connection, self.stat.clone());
+    async fn process_connection(
+        &self, name: &str, connection: ReadHalf<ClientTlsStream<TcpStream>>, error_receiver: Receiver<String>,
+        tunnel: Arc<Tunnel>,
+    ) -> bool {
+        let mut packet_reader = PacketReader::new(Bytes::new(), connection, error_receiver, self.stat.clone());
 
         loop {
             let packet = match packet_reader.read().await {

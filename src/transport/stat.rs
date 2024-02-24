@@ -82,7 +82,6 @@ impl TransportConnectionStat {
         Ok(())
     }
 
-    // FIXME(konishchev): Freeze on connection change?
     pub fn collect_tcp_socket<F: AsFd>(&self, encoder: &mut DescriptorEncoder, fd: &F) -> std::fmt::Result {
         match util::get_tcp_info(fd) {
             Ok(info) => {
