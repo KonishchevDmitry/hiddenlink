@@ -35,67 +35,82 @@ bitflags! {
 
 pub struct PacketReader<C: AsyncReadExt + Unpin> {
     buf: BytesMut,
+    data_size: usize,
+    packet_size: Option<usize>,
+    preread_data: Option<Bytes>,
     connection: C,
     error_receiver: Receiver<String>,
-    state: PacketReaderState,
     stat: Arc<TransportConnectionStat>,
-}
-
-enum PacketReaderState {
-    ReadSize{to_drop: usize},
-    ReadPacket{packet_size: usize},
 }
 
 impl<C: AsyncReadExt + Unpin> PacketReader<C> {
     pub fn new(preread_data: Bytes, connection: C, error_receiver: Receiver<String>, stat: Arc<TransportConnectionStat>) -> PacketReader<C> {
-        let mut buf = BytesMut::new(); // FIXME(konishchev): Set initial capacity
-        buf.extend(&preread_data);
+        let max_packet_size = constants::MTU;
+
+        // Since TLS connection is already buffered, we don't use any BytesMut features like BytesMut::advance() and use
+        // it as a simplest buffer to avoid extra copying.
+        let mut buf = BytesMut::with_capacity(max_packet_size);
+        unsafe { buf.set_len(max_packet_size); }
+
+        let preread_data = if preread_data.is_empty() {
+            None
+        } else {
+            Some(preread_data)
+        };
 
         PacketReader {
             buf,
+            data_size: 0,
+            packet_size: None,
+            preread_data,
             connection,
             error_receiver,
-            state: PacketReaderState::ReadSize{to_drop: 0},
             stat,
         }
     }
 
     pub async fn read(&mut self) -> GenericResult<Option<&[u8]>> {
         loop {
-            let (is_packet, data_size, max_size) = match self.state {
-                PacketReaderState::ReadSize{to_drop} => {
-                    self.buf.advance(to_drop);
-                    self.state = PacketReaderState::ReadSize{to_drop: 0};
-                    (false, 6, constants::MTU)
-                },
-                PacketReaderState::ReadPacket{packet_size} => (true, packet_size, packet_size),
-            };
+            let required_size = self.packet_size.unwrap_or(6);
 
-            while self.buf.len() < data_size {
-                self.buf.reserve(max_size - self.buf.len());
+            while self.data_size < required_size {
+                let read_size = match self.preread_data.as_mut() {
+                    Some(preread_data) => {
+                        let read_size = std::cmp::min(required_size - self.data_size, preread_data.len());
 
-                let read_size = tokio::select! {
-                    biased;
+                        (&mut self.buf[self.data_size..self.data_size + read_size]).copy_from_slice(&preread_data[..read_size]);
+                        preread_data.advance(read_size);
+                        if preread_data.is_empty() {
+                            self.preread_data = None;
+                        }
 
-                    result = self.connection.read_buf(&mut self.buf) => result,
-
-                    Ok(result) = &mut self.error_receiver => {
-                        return Err(result.into());
+                        read_size
                     },
-                }.map_err(|e| format!("Connection is broken: {e}"))?;
+                    None => tokio::select! {
+                        biased;
+
+                        result = self.connection.read(&mut self.buf[self.data_size..required_size]) => result,
+
+                        Ok(result) = &mut self.error_receiver => {
+                            return Err(result.into());
+                        },
+                    }.map_err(|e| format!("Connection is broken: {e}"))?,
+                };
 
                 if read_size == 0 {
-                    if self.buf.is_empty() {
+                    if self.data_size == 0 {
                         return Ok(None);
                     }
                     return Err!("Connection has been unexpectedly closed by peer");
                 }
+
+                self.data_size += read_size;
             }
 
-            if is_packet {
-                let packet = &self.buf[..data_size];
+            if let Some(packet_size) = self.packet_size.take() {
+                self.data_size = 0;
+                let packet = &self.buf[..packet_size];
                 self.stat.on_packet_received(packet);
-                self.state = PacketReaderState::ReadSize{to_drop: data_size};
                 return Ok(Some(packet));
             }
 
@@ -106,11 +121,11 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
                 _ => return Err!("Got an invalid packet: {}", util::format_packet(&self.buf)),
             };
 
-            if size < min_size || size > constants::MTU {
+            if size < min_size || size > self.buf.len() {
                 return Err!("Got IPv{version} packet with an invalid size: {size}");
             }
 
-            self.state = PacketReaderState::ReadPacket{packet_size: size};
+            self.packet_size.replace(size);
         }
     }
 }
