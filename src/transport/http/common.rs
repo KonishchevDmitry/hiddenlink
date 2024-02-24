@@ -218,7 +218,6 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin + 'static> PacketWriter<C> {
         Ok(())
     }
 
-    // FIXME(konishchev): Check socket buffers?
     async fn send(&self, packet: &mut [u8]) -> EmptyResult {
         let writer = self.writer.lock().unwrap().clone();
 
@@ -240,7 +239,6 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin + 'static> PacketWriter<C> {
         }
 
         self.stat.on_packet_sent(packet);
-        // FIXME(konishchev): ioctl_siocoutq: 84 -> 106
         Ok(())
     }
 }

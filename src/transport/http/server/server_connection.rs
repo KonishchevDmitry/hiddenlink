@@ -81,7 +81,6 @@ impl ServerConnection {
         let tls_handshake = match tls_acceptor.as_mut().await {
             Ok(handshake) => handshake,
             Err(err) => {
-                // FIXME(konishchev): Check for ECONNRESET?
                 trace!("[{}] TLS handshake failed: {err}.", self.name);
                 if let Some(tcp_connection) = tls_acceptor.take_io() {
                     self.handle_tls_handshake_error(tcp_connection).await;
