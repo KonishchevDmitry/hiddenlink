@@ -31,6 +31,7 @@ itertools = "0.12.1"
 libc = "0.2.153"
 log = "0.4.20"
 nix = { version = "0.28.0", features = ["ioctl", "resource", "socket"] }
+num = "0.4.1"
 pktparse = "0.7.1"
 prometheus-client = "0.22.1"
 rand = "0.8.5"

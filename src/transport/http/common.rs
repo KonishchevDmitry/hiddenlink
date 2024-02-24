@@ -7,8 +7,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bitflags::bitflags;
 use bytes::{Bytes, BytesMut, Buf};
-use log::error;
+use log::{trace, error};
+use num::ToPrimitive;
 use prometheus_client::encoding::DescriptorEncoder;
+use rand::{Rng, distributions::{Alphanumeric, Distribution, uniform::{SampleRange, SampleUniform}}};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -71,40 +73,8 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
 
     pub async fn read(&mut self) -> GenericResult<Option<&[u8]>> {
         loop {
-            let required_size = self.packet_size.unwrap_or(6);
-
-            while self.data_size < required_size {
-                let read_size = match self.preread_data.as_mut() {
-                    Some(preread_data) => {
-                        let read_size = std::cmp::min(required_size - self.data_size, preread_data.len());
-
-                        self.buf[self.data_size..self.data_size + read_size].copy_from_slice(&preread_data[..read_size]);
-                        preread_data.advance(read_size);
-                        if preread_data.is_empty() {
-                            self.preread_data = None;
-                        }
-
-                        read_size
-                    },
-                    None => tokio::select! {
-                        biased;
-
-                        result = self.connection.read(&mut self.buf[self.data_size..required_size]) => result,
-
-                        Ok(result) = &mut self.error_receiver => {
-                            return Err(result.into());
-                        },
-                    }.map_err(|e| format!("Connection is broken: {e}"))?,
-                };
-
-                if read_size == 0 {
-                    if self.data_size == 0 {
-                        return Ok(None);
-                    }
-                    return Err!("Connection has been unexpectedly closed by peer");
-                }
-
-                self.data_size += read_size;
+            if !self.read_data(self.packet_size.unwrap_or(6)).await? {
+                return Ok(None);
             }
 
             if let Some(packet_size) = self.packet_size.take() {
@@ -114,11 +84,28 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
                 return Ok(Some(packet));
             }
 
+            // A fake HTTP response before connection shutdown
+            if self.buf[0] == 0 {
+                let size = 3 + usize::from(u16::from_be_bytes([self.buf[1], self.buf[2]]));
+                if size > self.buf.len() {
+                    return Err!("Got an invalid fake HTTP response size: {size}");
+                }
+
+                assert!(self.read_data(size).await?);
+                self.data_size = 0;
+
+                if self.read_data(1).await? {
+                    return Err!("Got an unexpected fake HTTP response not followed by connection shutdown");
+                }
+
+                return Ok(None);
+            }
+
             let version = self.buf[0] >> 4;
             let (min_size, size) = match version {
                 4 => (constants::IPV4_HEADER_SIZE, u16::from_be_bytes([self.buf[2], self.buf[3]]).into()),
                 6 => (constants::IPV6_HEADER_SIZE, usize::from(u16::from_be_bytes([self.buf[4], self.buf[5]])) + constants::IPV6_HEADER_SIZE),
-                _ => return Err!("Got an invalid packet: {}", util::format_packet(&self.buf)),
+                _ => return Err!("Got an invalid packet header: {}", util::format_packet(&self.buf[..self.data_size])),
             };
 
             if size < min_size || size > self.buf.len() {
@@ -127,6 +114,44 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
 
             self.packet_size.replace(size);
         }
+    }
+
+    async fn read_data(&mut self, size: usize) -> GenericResult<bool> {
+        while self.data_size < size {
+            let read_size = match self.preread_data.as_mut() {
+                Some(preread_data) => {
+                    let read_size = std::cmp::min(size - self.data_size, preread_data.len());
+
+                    self.buf[self.data_size..self.data_size + read_size].copy_from_slice(&preread_data[..read_size]);
+                    preread_data.advance(read_size);
+                    if preread_data.is_empty() {
+                        self.preread_data = None;
+                    }
+
+                    read_size
+                },
+                None => tokio::select! {
+                    biased;
+
+                    result = self.connection.read(&mut self.buf[self.data_size..size]) => result,
+
+                    Ok(result) = &mut self.error_receiver => {
+                        return Err(result.into());
+                    },
+                }.map_err(|e| format!("Connection is broken: {e}"))?,
+            };
+
+            if read_size == 0 {
+                if self.data_size == 0 {
+                    return Ok(false);
+                }
+                return Err!("Connection has been unexpectedly closed by peer");
+            }
+
+            self.data_size += read_size;
+        }
+
+        Ok(true)
     }
 }
 
@@ -159,7 +184,7 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin + 'static> PacketWriter<C> {
 
         (connection, previous_connection.map(|connection| {
             tokio::spawn(async move {
-                connection.shutdown().await;
+                connection.shutdown(None).await;
             })
         }))
     }
@@ -175,16 +200,16 @@ impl<C: AsyncWriteExt + Send + Sync + Unpin + 'static> PacketWriter<C> {
         };
 
         if shutdown {
-            writer.shutdown().await;
+            writer.shutdown(None).await;
         }
     }
 
-    pub async fn close(&self, shutdown: bool) {
+    pub async fn close(&self, shutdown_with_payload: Option<&[u8]>) {
         let writer = self.writer.lock().unwrap().take();
 
         if let Some(writer) = writer {
-            if shutdown {
-                writer.shutdown().await;
+            if let Some(payload) = shutdown_with_payload {
+                writer.shutdown(Some(payload)).await;
             }
         }
     }
@@ -256,10 +281,8 @@ impl<C: AsyncWriteExt + Unpin> PacketWriterConnection<C> {
         }
     }
 
-    async fn shutdown(&self) {
-        if let Err(err) = self.connection.lock().await.shutdown().await {
-            error!("[{}] {err}.", self.name);
-        }
+    async fn shutdown(&self, payload: Option<&[u8]>) {
+        self.connection.lock().await.shutdown(&self.name, payload).await;
     }
 }
 
@@ -269,18 +292,25 @@ struct PacketWriterConnectionHandle<C: AsyncWriteExt + Unpin> {
 }
 
 impl<C: AsyncWriteExt + Unpin> PacketWriterConnectionHandle<C> {
-    async fn shutdown(&mut self) -> EmptyResult {
+    async fn shutdown(&mut self, name: &str, payload: Option<&[u8]>) {
         let Some(error_sender) = self.error_sender.take() else {
-            return Ok(());
+            return;
         };
 
-        if let Err(err) = self.socket.shutdown().await {
-            if err.kind() != ErrorKind::NotConnected {
-                error_sender.send(format!("Failed to shutdown the socket: {err}"))?;
+        if let Some(payload) = payload {
+            if let Err(err) = self.socket.write_all(payload).await {
+                if let Err(err) = error_sender.send(format!("The connection is broken: {err}")) {
+                    trace!("[{name}] Failed to send shutdown payload: {err}.");
+                }
+                return;
             }
         }
 
-        Ok(())
+        if let Err(err) = self.socket.shutdown().await {
+            if let Err(err) = error_sender.send(format!("Failed to shutdown the socket: {err}")) {
+                error!("[{name}] {err}.");
+            }
+        }
     }
 }
 
@@ -325,4 +355,12 @@ pub fn configure_socket_timeout(connection: &TcpStream, timeout: Duration, keep_
     }
 
     Ok(())
+}
+
+pub fn generate_random_payload<R, I>(range: R) -> (impl Iterator<Item=u8>, I)
+    where R: SampleRange<I>, I: SampleUniform + PartialOrd + ToPrimitive,
+{
+    let mut random = rand::thread_rng();
+    let size: I = random.gen_range(range);
+    (Alphanumeric.sample_iter(random).take(size.to_usize().unwrap()), size)
 }

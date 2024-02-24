@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
 use log::{trace, info, warn, error};
 use prometheus_client::encoding::DescriptorEncoder;
-use rand::{Rng, distributions::{Alphanumeric, Distribution}};
+use rand::Rng;
 use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -18,8 +18,8 @@ use tokio_rustls::client::TlsStream as ClientTlsStream;
 
 use crate::core::{EmptyResult, GenericResult};
 use crate::transport::{Transport, TransportDirection};
-use crate::transport::http::common::{self, ConnectionFlags, PacketReader, PacketWriter, pre_configure_hiddenlink_socket,
-    post_configure_hiddenlink_socket};
+use crate::transport::http::common::{self, ConnectionFlags, PacketReader, PacketWriter, generate_random_payload,
+    pre_configure_hiddenlink_socket, post_configure_hiddenlink_socket};
 use crate::transport::stat::TransportConnectionStat;
 use crate::tunnel::Tunnel;
 use crate::util;
@@ -147,15 +147,17 @@ impl Connection {
 
     async fn process_handshake(&self, connection: &mut ClientTlsStream<TcpStream>) -> EmptyResult {
         let name_len: u8 = self.name.len().try_into().map_err(|_| "Transport name is too long")?;
-        let fake_http_request_size: u16 = rand::thread_rng().gen_range(100..=2000);
+
+        // Send random payload to mimic HTTP request
+        let (fake_http_request, fake_http_request_size) = generate_random_payload(100..=2000);
 
         let mut request = BytesMut::new();
         request.put_slice(self.config.secret.as_bytes());
         request.put_u8(self.config.flags.bits());
         request.put_u8(name_len);
-        request.put_u16(fake_http_request_size); // Send random payload to mimic HTTP request
+        request.put_u16(fake_http_request_size);
         request.put_slice(self.name.as_bytes());
-        request.extend(Alphanumeric.sample_iter(rand::thread_rng()).take(fake_http_request_size.into()));
+        request.extend(fake_http_request);
         request.put_slice(common::HEADER_SUFFIX);
         connection.write_all(&request).await?;
 

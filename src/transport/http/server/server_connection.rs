@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use log::{trace, info, warn};
-use rand::{Rng, distributions::{Alphanumeric, Distribution}};
 use rustls::ClientConfig;
 use rustls::server::Acceptor;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -13,8 +12,8 @@ use tokio_rustls::LazyConfigAcceptor;
 use tokio_rustls::server::TlsStream;
 
 use crate::core::{GenericResult, ResultTools};
-use crate::transport::http::common::{self, ConnectionFlags, configure_socket_timeout, pre_configure_hiddenlink_socket,
-    post_configure_hiddenlink_socket};
+use crate::transport::http::common::{self, ConnectionFlags, configure_socket_timeout, generate_random_payload,
+    pre_configure_hiddenlink_socket, post_configure_hiddenlink_socket};
 use crate::transport::http::server::proxied_connection::ProxiedConnection;
 use crate::transport::http::tls::TlsDomains;
 
@@ -197,12 +196,12 @@ impl ServerConnection {
             })
             .ok_or_else(|| format!("Got an invalid connection name: {:?}", String::from_utf8_lossy(raw_name)))?;
 
-        // Send random payload to mimic HTTP response
-        let fake_http_response_size: u16 = rand::thread_rng().gen_range(70..=350);
+        // Send random payload to mimic HTTP response (headers only)
+        let (fake_http_response, fake_http_response_size) = generate_random_payload(70..=350);
 
         let mut response = BytesMut::new();
         response.put_u16(fake_http_response_size);
-        response.extend(Alphanumeric.sample_iter(rand::thread_rng()).take(fake_http_response_size.into()));
+        response.extend(fake_http_response);
         response.put_slice(common::HEADER_SUFFIX);
         connection.write_all(&response).await?;
 

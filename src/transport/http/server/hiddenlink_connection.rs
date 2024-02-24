@@ -2,17 +2,19 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use log::{info, warn, error};
+use num::ToPrimitive;
 use prometheus_client::encoding::DescriptorEncoder;
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 use tokio_rustls::server::TlsStream;
 
+use crate::constants;
 use crate::core::EmptyResult;
 use crate::transport::{Transport, TransportDirection};
-use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter};
+use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter, generate_random_payload};
 use crate::transport::stat::TransportConnectionStat;
 use crate::tunnel::Tunnel;
 use crate::util;
@@ -47,16 +49,17 @@ impl HiddenlinkConnection {
     pub async fn handle(&self, tunnel: Arc<Tunnel>) {
         let mut packet_reader = self.packet_reader.lock().await;
 
-        let shutdown = loop {
+        loop {
             let packet = match packet_reader.read().await {
                 Ok(Some(packet)) => packet,
                 Ok(None) => {
                     info!("[{}]: Client has closed the connection.", self.name);
-                    break true;
+                    break;
                 },
                 Err(err) => {
                     warn!("[{}]: {err}.", self.name);
-                    break false;
+                    self.writer.close(None).await;
+                    return;
                 }
             };
 
@@ -71,8 +74,18 @@ impl HiddenlinkConnection {
             }
         };
 
-        // FIXME(konishchev): Send random payload?
-        self.writer.close(shutdown).await;
+        // Send random payload to mimic HTTP response
+
+        let header_size = 3;
+        let client_buffer_size = constants::MTU;
+        let (payload, payload_size) = generate_random_payload(200..=client_buffer_size - header_size);
+
+        let mut fake_http_response = BytesMut::with_capacity(header_size + payload_size);
+        fake_http_response.put_u8(0);
+        fake_http_response.put_u16(payload_size.to_u16().unwrap());
+        fake_http_response.extend(payload);
+
+        self.writer.close(Some(&fake_http_response)).await;
     }
 }
 
