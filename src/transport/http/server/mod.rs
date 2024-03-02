@@ -35,8 +35,10 @@ use crate::tunnel::Tunnel;
 pub struct HttpServerTransportConfig {
     bind_address: SocketAddr,
     upstream_address: SocketAddr,
-    default_domain: TlsDomainConfig,
+    #[serde(default)]
+    proxy_protocol: bool,
 
+    default_domain: TlsDomainConfig,
     #[serde(default)]
     additional_domains: Vec<TlsDomainConfig>,
 
@@ -54,6 +56,7 @@ pub struct HttpServerTransport {
 
     upstream_address: SocketAddr,
     upstream_client_config: Arc<ClientConfig>,
+    proxy_protocol: bool,
 
     proxied_connections_count: Arc<Gauge>,
     proxied_connections_semaphore: Arc<Semaphore>,
@@ -94,6 +97,7 @@ impl HttpServerTransport {
 
             upstream_address: config.upstream_address,
             upstream_client_config,
+            proxy_protocol: config.proxy_protocol,
 
             proxied_connections_count: Arc::new(Gauge::default()),
             proxied_connections_semaphore: Arc::new(Semaphore::new(max_proxied_connections)),
@@ -118,7 +122,10 @@ impl HttpServerTransport {
         loop {
             let proxied_connection_permit = self.proxied_connections_semaphore.clone().acquire_owned().await.unwrap();
 
-            let (connection, peer_addr) = match listener.accept().await {
+            let (connection, peer_addr, local_addr) = match listener.accept().await.and_then(|(connection, peer_addr)| {
+                let local_addr = connection.local_addr()?;
+                Ok((connection, peer_addr, local_addr))
+            }) {
                 Ok(result) => result,
                 Err(err) => {
                     if err.kind() == ErrorKind::ConnectionAborted {
@@ -138,8 +145,8 @@ impl HttpServerTransport {
             let proxied_connections = self.proxied_connections_count.clone();
 
             let server_connection = ServerConnection::new(
-                peer_addr, self.secret.clone(), self.domains.clone(),
-                self.upstream_address, self.upstream_client_config.clone());
+                peer_addr, local_addr, self.secret.clone(), self.domains.clone(),
+                self.upstream_address, self.upstream_client_config.clone(), self.proxy_protocol);
 
             proxied_connections.inc();
             tokio::spawn(async move {

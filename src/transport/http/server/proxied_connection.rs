@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use log::trace;
 use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
@@ -25,12 +25,18 @@ impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
     pub async fn new(
         name: &'a str, preread_data: Bytes, client_connection: C, use_preread_data_only: bool,
         upstream_client_config: Arc<ClientConfig>, upstream_addr: SocketAddr, upstream_domain: &str,
+        proxy_protocol: Option<ProxyProtocolHeader>,
     ) -> GenericResult<ProxiedConnection<'a, C>> {
         let domain = DnsName::try_from(upstream_domain).map_err(|_| format!(
             "Invalid DNS name: {:?}", upstream_domain))?.to_owned();
 
-        let upstream_tcp_connection = TcpStream::connect(upstream_addr).await.map_err(|e| format!(
+        let mut upstream_tcp_connection = TcpStream::connect(upstream_addr).await.map_err(|e| format!(
             "Unable to connect: {}", e))?;
+
+        if let Some(proxy_protocol) = proxy_protocol {
+            upstream_tcp_connection.write_all_buf(&mut proxy_protocol.encode()).await.map_err(|e| format!(
+                "Unable to send proxy protocol header: {}", e))?;
+        }
 
         let domain = ServerName::DnsName(domain);
         let upstream_tls_connector = TlsConnector::from(upstream_client_config);
@@ -93,4 +99,48 @@ async fn proxy_connection<R, W>(preread_data: Option<Bytes>, reader: Option<R>, 
         "Unable to shutdown connection: {}", e))?;
 
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+pub struct ProxyProtocolHeader {
+    pub peer_addr: SocketAddr,
+    pub local_addr: SocketAddr,
+}
+
+impl ProxyProtocolHeader {
+    // See http://www.haproxy.org/download/3.0/doc/proxy-protocol.txt for details
+    fn encode(&self) -> BytesMut {
+        const SIGNATURE: [u8; 12] = [0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A];
+        const VERSION: u8 = 2;
+        const CONNECTION_PROXY: u8 = 1;
+        const FAMILY_AF_INET: u8 = 1;
+        const FAMILY_AF_INET6: u8 = 2;
+        const PROTOCOL_STREAM: u8 = 1;
+
+        let mut header = BytesMut::with_capacity(13 + 3 + 36);
+        header.put_slice(&SIGNATURE);
+        header.put_u8(VERSION << 4 | CONNECTION_PROXY);
+
+        match (self.peer_addr, self.local_addr) {
+            (SocketAddr::V4(peer), SocketAddr::V4(addr)) => {
+                header.put_u8(FAMILY_AF_INET << 4 | PROTOCOL_STREAM);
+                header.put_u16(12);
+                header.put_slice(&peer.ip().octets());
+                header.put_slice(&addr.ip().octets());
+                header.put_u16(peer.port());
+                header.put_u16(addr.port());
+            },
+            (SocketAddr::V6(peer), SocketAddr::V6(addr)) => {
+                header.put_u8(FAMILY_AF_INET6 << 4 | PROTOCOL_STREAM);
+                header.put_u16(36);
+                header.put_slice(&peer.ip().octets());
+                header.put_slice(&addr.ip().octets());
+                header.put_u16(peer.port());
+                header.put_u16(addr.port());
+            },
+            (SocketAddr::V4(_), SocketAddr::V6(_)) | (SocketAddr::V6(_), SocketAddr::V4(_)) => unreachable!(),
+        }
+
+        header
+    }
 }

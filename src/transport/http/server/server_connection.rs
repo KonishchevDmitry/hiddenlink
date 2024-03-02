@@ -14,32 +14,40 @@ use tokio_rustls::server::TlsStream;
 use crate::core::{GenericResult, ResultTools};
 use crate::transport::http::common::{self, ConnectionFlags, configure_socket_timeout, generate_random_payload,
     pre_configure_hiddenlink_socket, post_configure_hiddenlink_socket};
-use crate::transport::http::server::proxied_connection::ProxiedConnection;
+use crate::transport::http::server::proxied_connection::{ProxiedConnection, ProxyProtocolHeader};
 use crate::transport::http::tls::TlsDomains;
 
 pub struct ServerConnection {
     name: String,
+
+    peer_addr: SocketAddr,
+    local_addr: SocketAddr,
 
     secret: Arc<String>,
     domains: Arc<TlsDomains>,
 
     upstream_addr: SocketAddr,
     upstream_client_config: Arc<ClientConfig>,
+    proxy_protocol: bool,
 }
 
 impl ServerConnection {
     pub fn new(
-        peer_addr: SocketAddr, secret: Arc<String>, domains: Arc<TlsDomains>,
-        upstream_addr: SocketAddr, upstream_client_config: Arc<ClientConfig>,
+        peer_addr: SocketAddr, local_addr: SocketAddr, secret: Arc<String>, domains: Arc<TlsDomains>,
+        upstream_addr: SocketAddr, upstream_client_config: Arc<ClientConfig>, proxy_protocol: bool,
     ) -> ServerConnection {
         ServerConnection {
             name: format!("HTTP connection from {}", peer_addr),
+
+            peer_addr,
+            local_addr,
 
             secret,
             domains,
 
             upstream_addr,
             upstream_client_config,
+            proxy_protocol,
         }
     }
 
@@ -226,9 +234,16 @@ impl ServerConnection {
     async fn proxy_request<C: AsyncRead + AsyncWrite>(
         &self, preread_data: Bytes, connection: C, use_preread_data_only: bool, upstream_domain: &str,
     ) {
+        let proxy_protocol = self.proxy_protocol.then(|| {
+            ProxyProtocolHeader {
+                peer_addr: self.peer_addr,
+                local_addr: self.local_addr,
+            }
+        });
+
         match ProxiedConnection::new(
             &self.name, preread_data, connection, use_preread_data_only,
-            self.upstream_client_config.clone(), self.upstream_addr, upstream_domain,
+            self.upstream_client_config.clone(), self.upstream_addr, upstream_domain, proxy_protocol,
         ).await {
             Ok(proxied_connection) => {
                 proxied_connection.handle().await;
