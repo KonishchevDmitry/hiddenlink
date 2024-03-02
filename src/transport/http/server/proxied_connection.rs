@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -110,6 +110,15 @@ pub struct ProxyProtocolHeader {
 impl ProxyProtocolHeader {
     // See http://www.haproxy.org/download/3.0/doc/proxy-protocol.txt for details
     fn encode(&self) -> BytesMut {
+        let (mut peer_addr, mut local_addr) = (self.peer_addr, self.local_addr);
+
+        if let (SocketAddr::V6(peer), SocketAddr::V6(local)) = (peer_addr, local_addr) {
+            if let (Some(peer), Some(local)) = (peer.ip().to_ipv4_mapped(), local.ip().to_ipv4_mapped()) {
+                peer_addr = SocketAddr::V4(SocketAddrV4::new(peer, peer_addr.port()));
+                local_addr = SocketAddr::V4(SocketAddrV4::new(local, local_addr.port()));
+            }
+        }
+
         const SIGNATURE: [u8; 12] = [0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A];
         const VERSION: u8 = 2;
         const CONNECTION_PROXY: u8 = 1;
@@ -121,7 +130,7 @@ impl ProxyProtocolHeader {
         header.put_slice(&SIGNATURE);
         header.put_u8(VERSION << 4 | CONNECTION_PROXY);
 
-        match (self.peer_addr, self.local_addr) {
+        match (peer_addr, local_addr) {
             (SocketAddr::V4(peer), SocketAddr::V4(addr)) => {
                 header.put_u8(FAMILY_AF_INET << 4 | PROTOCOL_STREAM);
                 header.put_u16(12);
