@@ -10,6 +10,7 @@ edition = "2021"
 
 [lints.clippy]
 new-ret-no-self = "allow"
+too-many-arguments = "allow"
 
 [profile.release]
 codegen-units = 1

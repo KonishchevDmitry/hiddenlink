@@ -234,11 +234,9 @@ impl ServerConnection {
     async fn proxy_request<C: AsyncRead + AsyncWrite>(
         &self, preread_data: Bytes, connection: C, use_preread_data_only: bool, upstream_domain: &str,
     ) {
-        let proxy_protocol = self.proxy_protocol.then(|| {
-            ProxyProtocolHeader {
-                peer_addr: self.peer_addr,
-                local_addr: self.local_addr,
-            }
+        let proxy_protocol = self.proxy_protocol.then_some(ProxyProtocolHeader {
+            peer_addr: self.peer_addr,
+            local_addr: self.local_addr,
         });
 
         match ProxiedConnection::new(

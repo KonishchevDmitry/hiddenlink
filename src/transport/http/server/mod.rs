@@ -122,10 +122,12 @@ impl HttpServerTransport {
         loop {
             let proxied_connection_permit = self.proxied_connections_semaphore.clone().acquire_owned().await.unwrap();
 
-            let (connection, peer_addr, local_addr) = match listener.accept().await.and_then(|(connection, peer_addr)| {
+            let accept_result = listener.accept().await.and_then(|(connection, peer_addr)| {
                 let local_addr = connection.local_addr()?;
                 Ok((connection, peer_addr, local_addr))
-            }) {
+            });
+
+            let (connection, peer_addr, local_addr) = match accept_result {
                 Ok(result) => result,
                 Err(err) => {
                     if err.kind() == ErrorKind::ConnectionAborted {
