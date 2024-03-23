@@ -98,7 +98,7 @@ impl TransportConnectionStat {
 
                 metrics::collect_family(
                     encoder, "socket_state", "Current socket state",
-                    &state_labels, &ConstGauge::new(1))?;
+                    &state_labels, &ConstGauge::new(1i64))?;
 
                 // FIXME(konishchev): Not available yet
                 // metrics::collect_family(

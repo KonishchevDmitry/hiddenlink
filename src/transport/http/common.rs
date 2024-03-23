@@ -23,7 +23,7 @@ use crate::core::{GenericResult, EmptyResult};
 use crate::transport::{Transport, TransportDirection};
 use crate::transport::stat::TransportConnectionStat;
 
-pub const MIN_SECRET_LEN: usize = 10;
+pub const MIN_SECRET_LEN: u64 = 10;
 pub const HEADER_SUFFIX: &[u8] = "hiddenlink!".as_bytes();
 pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60); // Standard nginx timeout
 

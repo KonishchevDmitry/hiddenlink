@@ -229,7 +229,7 @@ impl Collector for Controller {
             metrics::collect_family(&mut encoder, "transport_state", "Current transport state", &[
                 (metrics::TRANSPORT_LABEL, transport.name()),
                 ("state", state),
-            ], &ConstGauge::new(1))?;
+            ], &ConstGauge::new(1i64))?;
 
             transport.collect(&mut encoder)?;
         }
