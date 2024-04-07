@@ -51,6 +51,9 @@ tokio-tun = "0.11.2"
 validator = { version = "0.17.0", features = ["derive", "unic"] }
 x509-parser = "0.16.0"
 
+[target.'cfg(target_env = "musl")'.dependencies]
+aws-lc-rs = {features = ["bindgen"]}
+
 [build-dependencies]
 bindgen = "0.69.4"
 

@@ -6,13 +6,14 @@
 set -eu
 cd "$(dirname "$(realpath "$0")")/.."
 
-cargo build --release
+target=x86_64-unknown-linux-musl
+cargo build --release --target "$target"
 
-sudo install target/release/hiddenlink /usr/local/sbin/hiddenlink
+sudo install "target/$target/release/hiddenlink" /usr/local/sbin/hiddenlink
 sudo systemctl restart hiddenlink
 sleep 1 && sudo systemctl status hiddenlink
 
-scp target/release/hiddenlink proxy.lan:/var/tmp/hiddenlink
+scp "target/$target/release/hiddenlink" proxy.lan:/var/tmp/hiddenlink
 ssh konishchev@proxy.lan '
     set -eu
     sudo install /var/tmp/hiddenlink /usr/local/sbin/hiddenlink
