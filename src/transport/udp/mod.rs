@@ -34,11 +34,11 @@ pub struct InsecureUdpTransportConfig {
 #[derive(Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct SecureUdpTransportConfig {
-    #[validate]
+    #[validate(nested)]
     #[serde(flatten)]
     pub udp: InsecureUdpTransportConfig,
 
-    #[validate]
+    #[validate(nested)]
     #[serde(flatten)]
     pub securer: UdpConnectionSecurerConfig,
 }

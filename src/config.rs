@@ -19,7 +19,7 @@ pub struct Config {
     #[validate(length(min = 1))]
     pub name: String,
 
-    #[validate]
+    #[validate(nested)]
     #[validate(length(min = 1))]
     pub transports: Vec<TransportSpec>,
 
@@ -40,7 +40,7 @@ impl Config {
 pub struct TransportSpec {
     pub name: Option<String>,
 
-    #[validate]
+    #[validate(nested)]
     #[serde(flatten)]
     pub transport: TransportConfig,
 }
