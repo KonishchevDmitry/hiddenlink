@@ -7,10 +7,13 @@ use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::Notify;
+use tokio::time;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
 
 use crate::core::{GenericResult, EmptyResult};
+use crate::transport::http::common::CONNECTION_TIMEOUT;
 
 // Represents a proxied connection to real web server
 pub struct ProxiedConnection<'a, C: AsyncRead + AsyncWrite> {
@@ -54,20 +57,41 @@ impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
     }
 
     pub async fn handle(self) {
+        // Here we rely on:
+        // * TCP_USER_TIMEOUT to be sure that we don't hang on writes to client connection infinitely.
+        // * Upstream server timeouts: since we mimic it here and fully trust it, we proxy connections infinitely until
+        //   it decide to close the connection.
+
         let (client_reader, client_writer) = tokio::io::split(self.client_connection);
         let (upstream_reader, upstream_writer) = tokio::io::split(self.upstream_connection);
 
         let preread_data = self.preread_data;
         let client_reader = (!self.use_preread_data_only).then_some(client_reader);
 
+        let client_shutdown = Notify::new();
+
         match tokio::try_join!(
             async {
-                proxy_connection(Some(preread_data), client_reader, upstream_writer).await.map_err(|e| format!(
-                    "client -> upstream proxying has been interrupted: {}", e))
+                let result = proxy_connection(Some(preread_data), client_reader, upstream_writer).await.map_err(|e| format!(
+                    "client -> upstream proxying has been interrupted: {}", e));
+
+                if result.is_ok() {
+                    client_shutdown.notify_one();
+                }
+
+                result
             },
             async {
-                proxy_connection(None, Some(upstream_reader), client_writer).await.map_err(|e| format!(
-                    "upstream -> client proxying has been interrupted: {}", e))
+                let mut result = proxy_connection(None, Some(upstream_reader), client_writer).await.map_err(|e| format!(
+                    "upstream -> client proxying has been interrupted: {}", e));
+
+                if result.is_ok() && time::timeout(CONNECTION_TIMEOUT, client_shutdown.notified()).await.is_err() {
+                    result = Err!(concat!(
+                        "The client hasn't shutdown the connection after server connection shutdown. ",
+                        "Forcibly close it"));
+                }
+
+                result
             },
         ) {
             Ok(_) => {
