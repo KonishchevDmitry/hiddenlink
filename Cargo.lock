@@ -1170,7 +1170,7 @@ dependencies = [
 
 [[package]]
 name = "hiddenlink"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "aes",
  "async-trait",
