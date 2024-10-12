@@ -39,7 +39,6 @@ impl Controller {
 
         let tunnel = Arc::new(Tunnel::new(Tun::builder()
             .name(&config.name)
-            .packet_info(false)
             .try_build_mq(2) // A workaround for https://github.com/yaa110/tokio-tun/pull/19
             .map_err(|e| format!("Unable to attach to {:?} tun device: {}", config.name, e))?
             .drain(..).next().unwrap()));

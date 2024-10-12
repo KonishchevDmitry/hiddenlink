@@ -16,6 +16,7 @@ use std::path::Path;
 use std::process;
 use std::sync::Arc;
 
+use easy_logging::LoggingConfig;
 use log::{LevelFilter, error};
 use prometheus_client::{metrics::counter::Counter, registry::Registry};
 
@@ -33,7 +34,7 @@ fn main() {
     let error_counter = Counter::default();
 
     let log_error_counter = error_counter.clone();
-    let dispatch = easy_logging::builder(module_path!().split("::").next().unwrap(), args.log_level).chain(
+    let dispatch = LoggingConfig::new(module_path!().split("::").next().unwrap(), args.log_level).dispatch().chain(
         easy_logging::fern::Dispatch::new()
             .level(LevelFilter::Error)
             .chain(easy_logging::fern::Output::call(move |_| {

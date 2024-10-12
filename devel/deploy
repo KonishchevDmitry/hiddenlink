@@ -9,7 +9,7 @@ cd "$(dirname "$(realpath "$0")")/.."
 target=x86_64-unknown-linux-musl
 cargo build --release --target "$target"
 
-sudo install "target/$target/release/hiddenlink" /usr/local/sbin/hiddenlink
+sudo install "target/$target/release/hiddenlink" /usr/local/bin/hiddenlink
 sudo systemctl restart hiddenlink
 sleep 1 && sudo systemctl status hiddenlink
 

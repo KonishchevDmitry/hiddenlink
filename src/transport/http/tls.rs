@@ -1,10 +1,11 @@
+use std::fmt::Write;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use itertools::Itertools;
-use log::debug;
+use log::{debug, warn};
 use rustls::{RootCertStore, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde_derive::{Serialize, Deserialize};
@@ -100,9 +101,18 @@ fn match_domains(base: &str, domain: &str) -> bool {
 }
 
 pub fn load_roots() -> GenericResult<RootCertStore> {
-    let mut roots = RootCertStore::empty();
+    let native_certs = rustls_native_certs::load_native_certs();
 
-    for cert in rustls_native_certs::load_native_certs()? {
+    if !native_certs.errors.is_empty() {
+        let mut message = String::from("Got the following errors during certificate loading:");
+        for err in native_certs.errors {
+            write!(&mut message, "\n* {err}").unwrap();
+        }
+        warn!("{message}");
+    }
+
+    let mut roots = RootCertStore::empty();
+    for cert in native_certs.certs {
         roots.add(cert)?;
     }
 
