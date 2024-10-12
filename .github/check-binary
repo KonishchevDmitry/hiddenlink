@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#
+# Checks built binary
+#
+
+set -eu
+
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 TARGET" >&2
+    exit 1
+fi
+
+target="$1"
+
+dependencies="$(ldd "target/${CARGO_BUILD_TARGET:-}/$target/hiddenlink" | sed -r 's/^\s+//')"
+if [ "$dependencies" != "statically linked" ]; then
+    echo "The binary is not statically linked:" >&2
+    echo "$dependencies" >&2
+    exit 1
+fi

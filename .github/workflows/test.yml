@@ -1,0 +1,36 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: '0 19 * * 5'
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure build target
+      run: .github/configure-build-target
+
+    - name: Drop caches
+      run: rm Cargo.lock
+
+    - name: Build
+      run: cargo build
+
+    - name: Check the binary
+      run: .github/check-binary debug
+
+    - name: Test
+      run: cargo test

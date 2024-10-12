@@ -6,41 +6,68 @@ on:
       - v*.*.*
 
 jobs:
-  release:
-    name: Release
+  test:
+    name: Test
+    uses: KonishchevDmitry/hiddenlink/.github/workflows/test.yml@master
+
+  build:
+    name: Build
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: write
-
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
+
+    - name: Configure build target
+      run: .github/configure-build-target
 
     - name: Build
       env:
         CARGO_TERM_COLOR: always
       run: cargo build --release --locked
 
-    - name: Construct archive name
-      id: archive_name
-      uses: ASzc/change-string-case-action@v5
-      with:
-        string: ${{ format('hiddenlink-{0}-{1}-{2}.tar.bz2', runner.os, runner.arch, github.ref_name) }}
+    - name: Check the binary
+      run: .github/check-binary release
 
     - name: Create archive
-      shell: bash
+      id: archive
       run: |
         set -eu
 
-        binary_name=hiddenlink
-        archive_name="${{ steps.archive_name.outputs.lowercase }}"
+        name="hiddenlink-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_name }}.tar.bz2"
+        name="$(tr '[:upper:]' '[:lower:]' <<< "$name")"
+        echo "name=$name" >> "$GITHUB_OUTPUT"
 
-        mv "target/release/$binary_name" .
-        tar -cjf "$archive_name" "$binary_name"
+        build_directory="target/${CARGO_BUILD_TARGET:-}/release"
+        sudo chown 0:0 "$build_directory/hiddenlink"
+
+        tar -cjf "$name" -C "$build_directory" hiddenlink
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        path: ${{ steps.archive.outputs.name }}
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 1
+
+  publish:
+    name: Publish
+
+    needs: [test, build]
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        pattern: "*"
+        merge-multiple: true
 
     - name: Create release
       uses: svenstaro/upload-release-action@v2
       with:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
         tag: ${{ github.ref }}
-        file: ${{ steps.archive_name.outputs.lowercase }}
+        file: artifacts/*
+        file_glob: true
