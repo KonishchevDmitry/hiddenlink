@@ -16,7 +16,7 @@ sleep 1 && sudo systemctl status hiddenlink
 scp "target/$target/release/hiddenlink" proxy.lan:/var/tmp/hiddenlink
 ssh konishchev@proxy.lan '
     set -eu
-    sudo install /var/tmp/hiddenlink /usr/local/sbin/hiddenlink
+    sudo install /var/tmp/hiddenlink /usr/local/bin/hiddenlink
     sudo systemctl restart hiddenlink
     sleep 1 && sudo systemctl status hiddenlink
 '

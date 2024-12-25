@@ -13,6 +13,7 @@ use log::{trace, info, error};
 use prometheus_client::registry::Registry;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+use tower_http::compression::CompressionLayer;
 
 use crate::core::GenericResult;
 
@@ -23,6 +24,7 @@ pub async fn run(bind_address: SocketAddr, registry: Registry) -> GenericResult<
     let app = Router::new()
         .route("/metrics", get(get_metrics))
         .layer(middleware::from_fn(logging_middleware))
+        .layer(CompressionLayer::new())
         .with_state(Arc::new(registry));
 
     info!("[Metrics] Listening on {bind_address}.");
