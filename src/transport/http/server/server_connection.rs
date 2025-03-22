@@ -1,8 +1,9 @@
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::{BufMut, Bytes, BytesMut};
-use log::{trace, info, warn};
+use log::{trace, info, warn, error};
 use rustls::ClientConfig;
 use rustls::server::Acceptor;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -116,11 +117,21 @@ impl ServerConnection {
         Some((tls_connection, upstream_domain))
     }
 
-    async fn handle_tls_handshake_error(&self, tcp_connection: TcpStream) {
-        // Sending some invalid request to get authentic bad request error from upstream server
-        let invalid_request = Bytes::from_static(b" ");
-        let upstream_domain = self.domains.default_domain.primary_domain();
-        self.proxy_request(invalid_request, tcp_connection, true, upstream_domain).await
+    async fn handle_tls_handshake_error(&self, mut tcp_connection: TcpStream) {
+        // nginx detects invalid HTTPS requests and responses with a plain text/HTTP error in such cases. We could use
+        // this method to send some invalid request (or capture the original one) to upstream to get authentic bad
+        // request error from it – and proxy it back over plain TCP connection, but it doesn't work as expected (and as
+        // it's stated in crate docs), because rustls has already sent TLS alert to the socket, so we can't cleanly
+        // mimic the upstream behaviour here without manual interception of this alert.
+        //
+        // But, this behaviour with plain text responses to invalid TLS handshake varies from server to server, so our
+        // behaviour won't look odd – just like we have some TLS balancer before the upstream server.
+
+        if let Err(err) = tcp_connection.shutdown().await {
+            if err.kind() != ErrorKind::NotConnected {
+                error!("[{}] Failed to shutdown client connection: {}.", self.name, err);
+            }
+        }
     }
 
     async fn process_routing_decision(&self, mut connection: TlsStream<TcpStream>, upstream_domain: &str) -> GenericResult<RoutingDecision> {
