@@ -25,8 +25,8 @@ pub struct ServerConnection {
     peer_addr: SocketAddr,
     local_addr: SocketAddr,
 
-    secret: Arc<String>,
     domains: Arc<TlsDomains>,
+    http1_secret: Arc<Vec<u8>>,
 
     upstream_addr: SocketAddr,
     upstream_client_config: Arc<ClientConfig>,
@@ -35,7 +35,7 @@ pub struct ServerConnection {
 
 impl ServerConnection {
     pub fn new(
-        peer_addr: SocketAddr, local_addr: SocketAddr, secret: Arc<String>, domains: Arc<TlsDomains>,
+        peer_addr: SocketAddr, local_addr: SocketAddr, http1_secret: Arc<Vec<u8>>, domains: Arc<TlsDomains>,
         upstream_addr: SocketAddr, upstream_client_config: Arc<ClientConfig>, proxy_protocol: bool,
     ) -> ServerConnection {
         ServerConnection {
@@ -44,8 +44,8 @@ impl ServerConnection {
             peer_addr,
             local_addr,
 
-            secret,
             domains,
+            http1_secret,
 
             upstream_addr,
             upstream_client_config,
@@ -177,7 +177,7 @@ impl ServerConnection {
             }
         }
 
-        let secret = self.secret.as_bytes();
+        let secret = self.http1_secret.as_slice();
         let mut buf = BytesMut::with_capacity(secret.len() + Self::HIDDENLINK_STATIC_HEADER_SIZE);
 
         loop {
@@ -187,7 +187,7 @@ impl ServerConnection {
                 if &buf[..secret.len()] != secret {
                     break;
                 }
-                return self.process_hiddenlink_handshake(connection, buf).await.map_err(|e| format!(
+                return self.process_hiddenlink_handshake(connection, buf, secret.len()).await.map_err(|e| format!(
                     "Hiddenlink handshake failed: {e}").into());
             } else if size == 0 || buf != secret[..buf.len()] {
                 break;
@@ -206,9 +206,7 @@ impl ServerConnection {
 
     const HIDDENLINK_STATIC_HEADER_SIZE: usize = 1 + 1 + 2; // flags + name length + HTTP request size
 
-    async fn process_hiddenlink_handshake(&self, mut connection: TlsStream<TcpStream>, mut buf: BytesMut) -> GenericResult<RoutingDecision> {
-        let mut index = self.secret.len();
-
+    async fn process_hiddenlink_handshake(&self, mut connection: TlsStream<TcpStream>, mut buf: BytesMut, mut index: usize) -> GenericResult<RoutingDecision> {
         while buf.len() < index + Self::HIDDENLINK_STATIC_HEADER_SIZE {
             if connection.read_buf(&mut buf).await? == 0 {
                 return Err!("Got an unexpected EOF");

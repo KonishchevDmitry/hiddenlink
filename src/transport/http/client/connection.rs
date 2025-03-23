@@ -29,7 +29,7 @@ pub struct ConnectionConfig {
     pub domain: DnsName<'static>,
     pub client_config: Arc<ClientConfig>,
     pub flags: ConnectionFlags,
-    pub secret: String,
+    pub secret: Vec<u8>,
     pub min_ttl: Duration,
     pub max_ttl: Option<Duration>,
 }
@@ -152,7 +152,7 @@ impl Connection {
         let (fake_http_request, fake_http_request_size) = generate_random_payload(100..=2000);
 
         let mut request = BytesMut::new();
-        request.put_slice(self.config.secret.as_bytes());
+        request.put_slice(&self.config.secret);
         request.put_u8(self.config.flags.bits());
         request.put_u8(name_len);
         request.put_u16(fake_http_request_size);

@@ -17,6 +17,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::oneshot::{Receiver, Sender};
 use tokio::task::JoinHandle;
+use urlencoding;
 
 use crate::{constants, util};
 use crate::core::{GenericResult, EmptyResult};
@@ -360,6 +361,13 @@ pub fn configure_socket_timeout(connection: &TcpStream, timeout: Duration, keep_
     }
 
     Ok(())
+}
+
+// The result secret must be a prefix of a first line of a valid HTTP request – in other case, an attacker will be able
+// to brute-force the secret symbol-by-symbol if he knows how exactly the upstream server parses and validates HTTP
+// requests.
+pub fn encode_secret_for_http1(secret: &str) -> Vec<u8> {
+    format!("POST /hiddenlink/v1/connect?secret={}", urlencoding::encode(secret)).into_bytes()
 }
 
 pub fn generate_random_payload<R, I>(range: R) -> (impl Iterator<Item=u8>, I)

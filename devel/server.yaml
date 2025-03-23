@@ -16,6 +16,7 @@ transports:
     default_domain:
       cert: /etc/certs/server.lan.crt
       key: /etc/certs/server.lan.key
-    secret: GET /secret
+    # tr -dc a-zA-Z0-9 < /dev/urandom | fold -w 32 | head -n 1
+    secret: t0rA8yevHw1xED8bCnuFYfdHHzwQJQzw
 
 metrics_bind_address: 127.0.0.1:2001

@@ -112,7 +112,7 @@ impl Controller {
                     }
 
                     HttpServerTransport::new(&name, config, tunnel).await.map_err(|e| format!(
-                      "Failed to initialize {name:?} transport: {e}"))?
+                        "Failed to initialize {name:?} transport: {e}"))?
                 },
 
                 TransportConfig::InsecureUdp(config) => {

@@ -50,6 +50,7 @@ tokio = { version = "1", features = ["io-util", "macros", "rt", "rt-multi-thread
 tokio-rustls = "0.26.0"
 tokio-tun = "0.12.0"
 tower-http = { version = "0.5", features = ["compression-full"] }
+urlencoding = "2.1.3"
 validator = { version = "0.18.1", features = ["derive", "unic"] }
 x509-parser = "0.16.0"
 

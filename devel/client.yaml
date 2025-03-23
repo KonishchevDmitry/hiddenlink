@@ -12,7 +12,7 @@ transports:
 
   - type: http-client
     endpoint: server.lan:4000
-    secret: GET /secret
+    secret: t0rA8yevHw1xED8bCnuFYfdHHzwQJQzw
     connections: 2
     connection_max_ttl: 1m
 

@@ -23,7 +23,7 @@ use crate::core::{GenericResult, EmptyResult};
 use crate::metrics::{self, TransportLabels};
 use crate::transport::{Transport, TransportDirection, MeteredTransport};
 use crate::transport::connections::TransportConnections;
-use crate::transport::http::common::MIN_SECRET_LEN;
+use crate::transport::http::common::{self, MIN_SECRET_LEN};
 use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
 use crate::transport::http::server::server_connection::ServerConnection;
 use crate::transport::http::tls::{self, TlsDomains, TlsDomainConfig};
@@ -51,8 +51,8 @@ pub struct HttpServerTransport {
     name: String,
     labels: TransportLabels,
 
-    secret: Arc<String>,
     domains: Arc<TlsDomains>,
+    http1_secret: Arc<Vec<u8>>,
 
     upstream_address: SocketAddr,
     upstream_client_config: Arc<ClientConfig>,
@@ -67,8 +67,8 @@ pub struct HttpServerTransport {
 impl HttpServerTransport {
     pub async fn new(name: &str, config: &HttpServerTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn MeteredTransport>> {
         let labels = metrics::transport_labels(name);
-        let secret = Arc::new(config.secret.clone());
         let domains = Arc::new(TlsDomains::new(&config.default_domain, &config.additional_domains)?);
+        let http1_secret = Arc::new(common::encode_secret_for_http1(&config.secret));
 
         let roots = tls::load_roots().map_err(|e| format!(
             "Failed to load root certificates: {}", e))?;
@@ -92,8 +92,8 @@ impl HttpServerTransport {
             name: name.to_owned(),
             labels,
 
-            secret,
             domains,
+            http1_secret,
 
             upstream_address: config.upstream_address,
             upstream_client_config,
@@ -147,7 +147,7 @@ impl HttpServerTransport {
             let proxied_connections = self.proxied_connections_count.clone();
 
             let server_connection = ServerConnection::new(
-                peer_addr, local_addr, self.secret.clone(), self.domains.clone(),
+                peer_addr, local_addr, self.http1_secret.clone(), self.domains.clone(),
                 self.upstream_address, self.upstream_client_config.clone(), self.proxy_protocol);
 
             proxied_connections.inc();

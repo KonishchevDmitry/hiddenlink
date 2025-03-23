@@ -18,7 +18,7 @@ use crate::metrics::{TransportLabels, self};
 use crate::transport::{Transport, TransportDirection, MeteredTransport};
 use crate::transport::connections::TransportConnections;
 use crate::transport::http::client::connection::{Connection, ConnectionConfig};
-use crate::transport::http::common::{ConnectionFlags, MIN_SECRET_LEN};
+use crate::transport::http::common::{self, ConnectionFlags, MIN_SECRET_LEN};
 use crate::transport::http::tls;
 use crate::transport::stat::TransportConnectionStat;
 use crate::tunnel::Tunnel;
@@ -75,11 +75,12 @@ impl HttpClientTransport {
         flags.set(ConnectionFlags::INGRESS, config.ingress);
         flags.set(ConnectionFlags::EGRESS, config.egress);
 
+        let secret = common::encode_secret_for_http1(&config.secret);
+
         let min_ttl = config.connection_min_ttl.unwrap_or(Duration::from_secs(1));
         if min_ttl < Duration::from_secs(1) {
             return Err!("Too small connection minimal TTL: {min_ttl:?}");
         }
-
         if let Some(max_ttl) = config.connection_max_ttl {
             if max_ttl < min_ttl {
                 return Err!("Too small connection maximum TTL ({max_ttl:?}) - it's less than minimal TTL ({min_ttl:?})");
@@ -106,7 +107,7 @@ impl HttpClientTransport {
             domain,
             client_config,
             flags,
-            secret: config.secret.clone(),
+            secret,
             min_ttl,
             max_ttl: config.connection_max_ttl,
         });
