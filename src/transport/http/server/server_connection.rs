@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::{BufMut, Bytes, BytesMut};
+use itertools::Itertools;
 use log::{trace, info, warn, error};
 use rustls::ClientConfig;
 use rustls::server::Acceptor;
@@ -66,8 +67,10 @@ impl ServerConnection {
                 info!("[{}] The client has passed hiddenlink handshake as {:?}.", self.name, request.name);
                 request
             },
-            RoutingDecision::Proxy {preread_data, connection, upstream_domain} => {
-                self.process_request_proxying(preread_data, connection, &upstream_domain).await;
+            RoutingDecision::Proxy {connection, upstream_domain, negotiated_protocol, preread_data} => {
+                trace!("[{}] The client hasn't passed hiddenlink handshake. Proxying the request to {}...",
+                    self.name, self.upstream_addr);
+                self.proxy_request(connection, &upstream_domain, negotiated_protocol, preread_data).await;
                 return None;
             },
         };
@@ -76,13 +79,13 @@ impl ServerConnection {
     }
 
     async fn process_handshake(&self, tcp_connection: TcpStream) -> Option<RoutingDecision> {
-        let (tls_connection, upstream_domain) = self.process_tls_handshake(tcp_connection).await?;
-        self.process_routing_decision(tls_connection, upstream_domain).await.ok_or_handle_error(|err| {
+        let (tls_connection, upstream_domain, negotiated_protocol) = self.process_tls_handshake(tcp_connection).await?;
+        self.process_routing_decision(tls_connection, upstream_domain, negotiated_protocol).await.ok_or_handle_error(|err| {
             trace!("[{}] Connection is broken: {err}.", self.name);
         })
     }
 
-    async fn process_tls_handshake(&self, tcp_connection: TcpStream) -> Option<(TlsStream<TcpStream>, &str)> {
+    async fn process_tls_handshake(&self, tcp_connection: TcpStream) -> Option<(TlsStream<TcpStream>, &str, Option<Vec<u8>>)> {
         let tls_acceptor = LazyConfigAcceptor::new(Acceptor::default(), tcp_connection);
         tokio::pin!(tls_acceptor);
 
@@ -98,13 +101,35 @@ impl ServerConnection {
         };
 
         let client_hello = tls_handshake.client_hello();
-        // FIXME(konishchev): ALPN and HTTP/2 support
         let requested_domain = client_hello.server_name();
 
-        let (upstream_domain, config) = self.domains.select(requested_domain).get_config(requested_domain);
+        let (upstream_domain, mut tls_config) = self.domains.select(requested_domain).get_config(requested_domain);
         trace!("[{}] SNI: {:?} -> {}.", self.name, requested_domain, upstream_domain);
 
-        let tls_connection = match tls_handshake.into_stream(config).into_fallible().await {
+        // We negotiate only HTTP/2 and HTTP/1.1 protocols explicitly. For all other protocols fallback to no ALPN
+        // scheme which is effectively HTTP < 2. It's the safest way in terms of compatibility with upstream server.
+        //
+        // Testing:
+        // openssl s_client -connect server.lan:4000 -alpn h2,http/1.1
+        // curl -v --no-alpn https://server.lan:4000/
+        // curl -v --http1.1 https://server.lan:4000/
+        // curl -v --http2 https://server.lan:4000/
+        if let Some(mut alpn) = client_hello.alpn() {
+            trace!("[{}] ALPN: {}.", self.name, client_hello.alpn().unwrap().map(String::from_utf8_lossy).join(", "));
+
+            if let Some(protocol) = alpn.find(|&protocol| {
+                protocol == common::ALPN_HTTP2 || protocol == common::ALPN_HTTP1
+            }) {
+                let mut new_config = Arc::unwrap_or_clone(tls_config);
+                new_config.alpn_protocols.push(protocol.to_vec());
+                tls_config = Arc::new(new_config);
+            }
+        };
+
+        let mut negotiated_protocol = None;
+        let tls_connection = match tls_handshake.into_stream_with(tls_config, |conn| {
+            negotiated_protocol = conn.alpn_protocol().map(|protocol| protocol.to_vec());
+        }).into_fallible().await {
             Ok(tls_connection) => tls_connection,
             Err((err, tcp_connection)) => {
                 trace!("[{}] TLS handshake failed: {err}.", self.name);
@@ -113,8 +138,10 @@ impl ServerConnection {
             },
         };
 
-        trace!("[{}] TLS handshake completed.", self.name);
-        Some((tls_connection, upstream_domain))
+        trace!("[{}] TLS handshake completed. Negotiated ALPN: {:?}.",
+            self.name, negotiated_protocol.as_ref().map(|value| String::from_utf8_lossy(&value)));
+
+        Some((tls_connection, upstream_domain, negotiated_protocol))
     }
 
     async fn handle_tls_handshake_error(&self, mut tcp_connection: TcpStream) {
@@ -134,7 +161,22 @@ impl ServerConnection {
         }
     }
 
-    async fn process_routing_decision(&self, mut connection: TlsStream<TcpStream>, upstream_domain: &str) -> GenericResult<RoutingDecision> {
+    async fn process_routing_decision(
+        &self, mut connection: TlsStream<TcpStream>, upstream_domain: &str, negotiated_protocol: Option<Vec<u8>>
+    ) -> GenericResult<RoutingDecision> {
+        // At this time we don't support hiddenlink over HTTP/2, which is not good in terms of TLS fingerprint of our
+        // hiddenlink connections, but we don't bother about this now.
+        if let Some(protocol) = negotiated_protocol.as_ref() {
+            if protocol.as_slice() != common::ALPN_HTTP1 {
+                return Ok(RoutingDecision::Proxy {
+                    connection,
+                    upstream_domain: upstream_domain.to_owned(),
+                    negotiated_protocol,
+                    preread_data: Bytes::new(),
+                })
+            }
+        }
+
         let secret = self.secret.as_bytes();
         let mut buf = BytesMut::with_capacity(secret.len() + Self::HIDDENLINK_STATIC_HEADER_SIZE);
 
@@ -155,9 +197,10 @@ impl ServerConnection {
         configure_socket_timeout(connection.get_ref().0, common::CONNECTION_TIMEOUT, None)?;
 
         Ok(RoutingDecision::Proxy {
-            preread_data: buf.freeze(),
             connection,
             upstream_domain: upstream_domain.to_owned(),
+            negotiated_protocol,
+            preread_data: buf.freeze(),
         })
     }
 
@@ -237,22 +280,24 @@ impl ServerConnection {
         }))
     }
 
-    async fn process_request_proxying(&self, preread_data: Bytes, connection: TlsStream<TcpStream>, upstream_domain: &str) {
-        trace!("[{}] The client hasn't passed hiddenlink handshake. Proxying the request to {}...", self.name, self.upstream_addr);
-        self.proxy_request(preread_data, connection, false, upstream_domain).await
-    }
-
     async fn proxy_request<C: AsyncRead + AsyncWrite>(
-        &self, preread_data: Bytes, connection: C, use_preread_data_only: bool, upstream_domain: &str,
+        &self, connection: C, upstream_domain: &str, negotiated_protocol: Option<Vec<u8>>, preread_data: Bytes,
     ) {
+        let mut tls_config = self.upstream_client_config.clone();
+        if let Some(protocol) = negotiated_protocol {
+            let mut new_config = Arc::unwrap_or_clone(tls_config);
+            new_config.alpn_protocols.push(protocol);
+            tls_config = Arc::new(new_config);
+        }
+
         let proxy_protocol = self.proxy_protocol.then_some(ProxyProtocolHeader {
             peer_addr: self.peer_addr,
             local_addr: self.local_addr,
         });
 
         match ProxiedConnection::new(
-            &self.name, preread_data, connection, use_preread_data_only,
-            self.upstream_client_config.clone(), self.upstream_addr, upstream_domain, proxy_protocol,
+            &self.name, connection, preread_data, false,
+            tls_config, self.upstream_addr, upstream_domain, proxy_protocol,
         ).await {
             Ok(proxied_connection) => {
                 proxied_connection.handle().await;
@@ -268,9 +313,10 @@ impl ServerConnection {
 enum RoutingDecision {
     Hiddenlink(HiddenlinkConnectionRequest),
     Proxy {
-        preread_data: Bytes,
         connection: TlsStream<TcpStream>,
         upstream_domain: String,
+        negotiated_protocol: Option<Vec<u8>>,
+        preread_data: Bytes,
     },
 }
 

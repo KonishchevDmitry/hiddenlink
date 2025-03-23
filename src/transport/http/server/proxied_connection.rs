@@ -26,7 +26,7 @@ pub struct ProxiedConnection<'a, C: AsyncRead + AsyncWrite> {
 
 impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
     pub async fn new(
-        name: &'a str, preread_data: Bytes, client_connection: C, use_preread_data_only: bool,
+        name: &'a str, client_connection: C, preread_data: Bytes, use_preread_data_only: bool,
         upstream_client_config: Arc<ClientConfig>, upstream_addr: SocketAddr, upstream_domain: &str,
         proxy_protocol: Option<ProxyProtocolHeader>,
     ) -> GenericResult<ProxiedConnection<'a, C>> {
@@ -42,10 +42,9 @@ impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
         }
 
         let domain = ServerName::DnsName(domain);
-        let upstream_tls_connector = TlsConnector::from(upstream_client_config);
-
-        let upstream_tls_connection = upstream_tls_connector.connect(domain, upstream_tcp_connection).await.map_err(|e| format!(
-            "TLS handshake failed: {}", e))?;
+        let upstream_tls_connection = TlsConnector::from(upstream_client_config)
+            .connect(domain, upstream_tcp_connection).await
+            .map_err(|e| format!("TLS handshake failed: {}", e))?;
 
         Ok(ProxiedConnection {
             name,
