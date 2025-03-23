@@ -134,7 +134,7 @@ impl Connection {
             "Hiddenlink handshake failed: {e}"))?;
 
         let ttl = self.config.max_ttl.map(|max_ttl| {
-            let ttl = rand::thread_rng().gen_range(self.config.min_ttl..=max_ttl);
+            let ttl = rand::rng().random_range(self.config.min_ttl..=max_ttl);
             info!("[{name}] Connected (TTL={ttl:.0?}).");
             ttl
         }).or_else(|| {

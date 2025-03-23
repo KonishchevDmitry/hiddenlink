@@ -10,7 +10,7 @@ use bytes::{Bytes, BytesMut, Buf};
 use log::{trace, error};
 use num::ToPrimitive;
 use prometheus_client::encoding::DescriptorEncoder;
-use rand::{Rng, distributions::{Alphanumeric, Distribution, uniform::{SampleRange, SampleUniform}}};
+use rand::{Rng, distr::{Alphanumeric, Distribution, uniform::{SampleRange, SampleUniform}}};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -373,7 +373,7 @@ pub fn encode_secret_for_http1(secret: &str) -> Vec<u8> {
 pub fn generate_random_payload<R, I>(range: R) -> (impl Iterator<Item=u8>, I)
     where R: SampleRange<I>, I: SampleUniform + PartialOrd + ToPrimitive,
 {
-    let mut random = rand::thread_rng();
-    let size: I = random.gen_range(range);
-    (Alphanumeric.sample_iter(random).take(size.to_usize().unwrap()), size)
+    let mut rng = rand::rng();
+    let size: I = rng.random_range(range);
+    (Alphanumeric.sample_iter(rng).take(size.to_usize().unwrap()), size)
 }

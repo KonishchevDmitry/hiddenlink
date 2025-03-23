@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use host_port_pair::HostPortPair;
+use host_port_pair::{HostPortPair, Host};
 use log::trace;
 use prometheus_client::encoding::DescriptorEncoder;
 use rustls::ClientConfig;
@@ -88,9 +88,9 @@ impl HttpClientTransport {
         }
 
         let domain = HostPortPair::from_str(&config.endpoint).map_err(GenericError::from).and_then(|host_port| {
-            let domain = match host_port {
-                HostPortPair::DomainAddress(domain, _port) => domain,
-                HostPortPair::SocketAddress(_) => return Err!("domain name must be used"),
+            let domain = match host_port.host() {
+                Host::DnsName(domain) => domain,
+                Host::IpAddr(_) => return Err!("domain name must be used"),
             };
             Ok(DnsName::try_from(domain.to_owned())?)
         }).map_err(|e| format!("Invalid endpoint {:?}: {e}", config.endpoint))?;

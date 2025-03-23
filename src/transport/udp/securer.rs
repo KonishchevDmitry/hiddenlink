@@ -136,12 +136,12 @@ struct Session {
 
 impl Session {
     fn new(method: CipherKind, key: &[u8]) -> Session {
-        let mut random = rand::thread_rng();
-        let session_id = random.gen();
+        let mut rng = rand::rng();
+        let session_id = rng.random();
 
         Session {
             session_id,
-            packet_id: AtomicU32::new(random.gen()),
+            packet_id: AtomicU32::new(rng.random()),
             cipher: AeadCipher::new(method, key, session_id)
         }
     }
@@ -256,11 +256,11 @@ mod test {
         let secret = "2RUSCKTOeOhb9QSuTWbijw==";
         let mut server_address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
 
-        let server_config = ServerConfig::new(server_address, secret, method);
+        let server_config = ServerConfig::new(server_address, secret, method).unwrap();
         let server = ProxySocket::bind(Context::new_shared(ServerType::Server), &server_config).await.unwrap();
         server_address = server.local_addr().unwrap();
 
-        let client_config = ServerConfig::new(server_address, secret, method);
+        let client_config = ServerConfig::new(server_address, secret, method).unwrap();
         let client = ProxySocket::connect(Context::new_shared(ServerType::Local), &client_config).await.unwrap();
 
         let fake_target_address = Address::SocketAddress(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234)));
