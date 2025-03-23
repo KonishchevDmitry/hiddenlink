@@ -1,6 +1,6 @@
 [package]
 name = "hiddenlink"
-version = "1.0.4"
+version = "1.1.0"
 description = "A simple tunnel which tries to hide itself inside of other protocols"
 
 authors = ["Dmitry Konishchev <konishchev@gmail.com>"]
