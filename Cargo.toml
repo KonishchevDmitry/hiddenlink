@@ -11,6 +11,7 @@ edition = "2021"
 [lints.clippy]
 assigning_clones = "allow"
 new-ret-no-self = "allow"
+precedence = "allow"
 too-many-arguments = "allow"
 
 [profile.release]

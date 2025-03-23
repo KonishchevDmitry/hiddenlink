@@ -211,8 +211,8 @@ mod test {
             secret: "2RUSCKTOeOhb9QSuTWbijw==".to_owned()
         };
 
-        let message = "some secret message";
-        let expected_size = message.as_bytes().len() + 32;
+        let message = "some secret message".as_bytes();
+        let expected_size = message.len() + 32;
 
         let mut client = UdpConnectionSecurer::new(&config).unwrap();
         let server = UdpConnectionSecurer::new(&config).unwrap();
@@ -225,7 +225,7 @@ mod test {
                 client = UdpConnectionSecurer::new(&config).unwrap();
             }
 
-            client.encrypt(&mut buf, message.as_bytes());
+            client.encrypt(&mut buf, message);
             assert_eq!(buf.len(), expected_size);
 
             if encrypted.is_none() {
@@ -233,7 +233,7 @@ mod test {
             }
 
             let result = server.decrypt(&mut buf).unwrap();
-            assert_eq!(result, message.as_bytes());
+            assert_eq!(result, message);
         }
 
         let encrypted = encrypted.unwrap();

@@ -139,7 +139,7 @@ impl ServerConnection {
         };
 
         trace!("[{}] TLS handshake completed. Negotiated ALPN: {:?}.",
-            self.name, negotiated_protocol.as_ref().map(|value| String::from_utf8_lossy(&value)));
+            self.name, negotiated_protocol.as_ref().map(|value| String::from_utf8_lossy(value)));
 
         Some((tls_connection, upstream_domain, negotiated_protocol))
     }
