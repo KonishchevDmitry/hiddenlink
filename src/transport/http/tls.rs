@@ -206,8 +206,8 @@ fn load_key(path: &Path) -> GenericResult<PrivateKeyDer<'static>> {
     let mut file = BufReader::new(File::open(path)?);
 
     let mut key = Option::None;
-    for item in rustls_pemfile::pkcs8_private_keys(&mut file) {
-        if key.replace(item?).is_some() {
+    while let Some(item) = rustls_pemfile::private_key(&mut file)? {
+        if key.replace(item).is_some() {
             return Err!("the file contains more than one private key")
         }
     }
