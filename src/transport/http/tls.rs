@@ -212,7 +212,7 @@ fn load_key(path: &Path) -> GenericResult<PrivateKeyDer<'static>> {
         }
     }
 
-    Ok(key.ok_or("the file doesn't contain any private key")?.into())
+    Ok(key.ok_or("the file doesn't contain any private key")?)
 }
 
 #[cfg(test)]

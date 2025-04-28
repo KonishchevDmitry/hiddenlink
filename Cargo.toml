@@ -6,7 +6,7 @@ description = "A simple tunnel which tries to hide itself inside of other protoc
 authors = ["Dmitry Konishchev <konishchev@gmail.com>"]
 repository = "https://github.com/KonishchevDmitry/hiddenlink"
 license = "GPL-3.0+"
-edition = "2021"
+edition = "2024"
 
 [lints.clippy]
 assigning_clones = "allow"
