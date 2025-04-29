@@ -141,7 +141,7 @@ impl<C: AsyncReadExt + Unpin> PacketReader<C> {
 
                     result = self.connection.read(&mut self.buf[self.data_size..size]) => result,
 
-                    Ok(result) = &mut self.error_receiver => {
+                    Ok(result) = &mut self.error_receiver, if !self.error_receiver.is_terminated() => {
                         return Err(result.into());
                     },
                 }.map_err(|e| format!("Connection is broken: {e}"))?,
