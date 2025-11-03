@@ -281,10 +281,8 @@ impl Transport for UdpTransport {
     async fn send(&self, packet: &mut [u8]) -> EmptyResult {
         let last_ingress_packet = self.state.lock().unwrap().last_ingress_packet;
 
-        if let Some(last_ingress_packet) = last_ingress_packet {
-            if !last_ingress_packet.is_timed_out(Instant::now()) {
-                packet[0] |= INGRESS_STATE_MARKER;
-            }
+        if let Some(last_ingress_packet) = last_ingress_packet && !last_ingress_packet.is_timed_out(Instant::now()) {
+            packet[0] |= INGRESS_STATE_MARKER;
         }
 
         let result = match self.securer.as_ref() {

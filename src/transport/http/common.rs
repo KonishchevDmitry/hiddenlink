@@ -281,7 +281,7 @@ pub struct PacketWriterConnection<C: AsyncWriteExt + Unpin> {
 }
 
 impl<C: AsyncWriteExt + Unpin> PacketWriterConnection<C> {
-    fn fd(&self) -> BorrowedFd {
+    fn fd(&self) -> BorrowedFd<'_> {
         unsafe {
             BorrowedFd::borrow_raw(self.fd)
         }

@@ -166,15 +166,13 @@ impl ServerConnection {
     ) -> GenericResult<RoutingDecision> {
         // At this time we don't support hiddenlink over HTTP/2, which is not good in terms of TLS fingerprint of our
         // hiddenlink connections, but we don't bother about this now.
-        if let Some(protocol) = negotiated_protocol.as_ref() {
-            if protocol.as_slice() != common::ALPN_HTTP1 {
-                return Ok(RoutingDecision::Proxy {
-                    connection,
-                    upstream_domain: upstream_domain.to_owned(),
-                    negotiated_protocol,
-                    preread_data: Bytes::new(),
-                })
-            }
+        if let Some(protocol) = negotiated_protocol.as_ref() && protocol.as_slice() != common::ALPN_HTTP1 {
+            return Ok(RoutingDecision::Proxy {
+                connection,
+                upstream_domain: upstream_domain.to_owned(),
+                negotiated_protocol,
+                preread_data: Bytes::new(),
+            })
         }
 
         let secret = self.http1_secret.as_slice();

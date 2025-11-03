@@ -81,10 +81,8 @@ impl HttpClientTransport {
         if min_ttl < Duration::from_secs(1) {
             return Err!("Too small connection minimal TTL: {min_ttl:?}");
         }
-        if let Some(max_ttl) = config.connection_max_ttl {
-            if max_ttl < min_ttl {
-                return Err!("Too small connection maximum TTL ({max_ttl:?}) - it's less than minimal TTL ({min_ttl:?})");
-            }
+        if let Some(max_ttl) = config.connection_max_ttl && max_ttl < min_ttl {
+            return Err!("Too small connection maximum TTL ({max_ttl:?}) - it's less than minimal TTL ({min_ttl:?})");
         }
 
         let domain = HostPortPair::from_str(&config.endpoint).map_err(GenericError::from).and_then(|host_port| {
