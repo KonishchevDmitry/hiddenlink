@@ -5,6 +5,7 @@ mod cli;
 mod config;
 mod constants;
 mod controller;
+mod crawler;
 mod metrics;
 mod transport;
 mod tunnel;
