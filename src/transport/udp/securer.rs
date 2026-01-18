@@ -7,7 +7,7 @@ use aes::cipher::{BlockDecrypt, BlockEncrypt, BlockSizeUser, KeyInit};
 use base64::Engine;
 use bytes::{BufMut, BytesMut};
 use rand::Rng;
-use serde_derive::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 use shadowsocks_crypto::CipherKind;
 use validator::Validate;
 

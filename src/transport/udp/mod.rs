@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use bytes::BytesMut;
 use log::{trace, info, error};
 use prometheus_client::encoding::DescriptorEncoder;
-use serde_derive::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 use tokio::net::UdpSocket;
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 use tokio::time::{self, Duration, Instant};

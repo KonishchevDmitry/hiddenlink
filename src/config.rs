@@ -2,7 +2,7 @@ use std::fs::File;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use serde_derive::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 use validator::{Validate, ValidationErrors};
 
 use crate::core::GenericResult;

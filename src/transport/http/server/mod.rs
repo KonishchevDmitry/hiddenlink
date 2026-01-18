@@ -14,7 +14,7 @@ use nix::sys::resource::Resource;
 use prometheus_client::encoding::DescriptorEncoder;
 use prometheus_client::metrics::gauge::Gauge;
 use rustls::ClientConfig;
-use serde_derive::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use validator::Validate;

@@ -1309,7 +1309,6 @@ dependencies = [
  "rustls-native-certs",
  "rustls-pemfile",
  "serde",
- "serde_derive",
  "serde_yaml",
  "shadowsocks",
  "shadowsocks-crypto",

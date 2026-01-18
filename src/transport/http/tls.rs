@@ -8,7 +8,7 @@ use itertools::Itertools;
 use log::{debug, warn};
 use rustls::{RootCertStore, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use serde_derive::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 use validator::Validate;
 use x509_parser::extensions::{ParsedExtension, GeneralName};
 use x509_parser::nom::AsBytes;

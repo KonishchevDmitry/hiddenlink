@@ -9,7 +9,7 @@ use log::trace;
 use prometheus_client::encoding::DescriptorEncoder;
 use rustls::ClientConfig;
 use rustls::pki_types::DnsName;
-use serde_derive::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 use tokio::time::Duration;
 use validator::Validate;
 
