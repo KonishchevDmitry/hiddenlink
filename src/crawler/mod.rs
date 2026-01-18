@@ -3,6 +3,7 @@
 
 mod resources;
 mod sitemap;
+mod util;
 
 use std::collections::VecDeque;
 
