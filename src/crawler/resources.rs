@@ -94,9 +94,13 @@ impl Resource for Page {
         "page"
     }
 
-    async fn process(&self, response: Response, _queue: &mut CrawlQueue) -> GenericResult<u64> {
-        // FIXME(konishchev): Rewrite
-        let data = response.bytes().await?;
-        Ok(data.len() as u64)
+    async fn process(&self, mut response: Response, _queue: &mut CrawlQueue) -> GenericResult<u64> {
+        let mut size = 0;
+
+        while let Some(chunk) = response.chunk().await? {
+            size += chunk.len() as u64;
+        }
+
+        Ok(size)
     }
 }
