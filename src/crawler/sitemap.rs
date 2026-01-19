@@ -1,6 +1,3 @@
-// XXX(konishchev): Drop it
-#![allow(dead_code)]
-
 #[cfg(test)] use std::include_bytes;
 use std::io::Cursor;
 
@@ -38,13 +35,15 @@ pub struct Index {
 
 #[derive(Deserialize)]
 pub struct SitemapEntry {
-    // XXX(konishchev): This location can be a Sitemap, an Atom file, RSS file or a simple text file.
-    // XXX(konishchev): Compressed gzip
-    // XXX(konishchev): The location of a Sitemap file determines the set of URLs that can be included in that Sitemap. A Sitemap file located at http://example.com/catalog/sitemap.xml can include any URLs starting with http://example.com/catalog/ but can not include URLs starting with http://example.com/images/.
     #[serde(rename = "loc")]
     pub location: Url,
 }
 
+// The limit is defined by the standard (https://www.sitemaps.org/protocol.html)
+pub const SIZE_LIMIT: u64 = 50 * 1024 * 1024;
+
+// According to https://www.sitemaps.org/protocol.html, sitemap can also be an Atom/RSS or a plain text file + also can
+// be gzip compressed. For now don't support these variations.
 pub fn parse(buf: &[u8]) -> GenericResult<Sitemap> {
     Ok(quick_xml::de::from_reader(Cursor::new(buf))?)
 }

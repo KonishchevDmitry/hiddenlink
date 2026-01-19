@@ -6,23 +6,40 @@ mod sitemap;
 mod util;
 
 use std::collections::VecDeque;
+use std::fmt;
 
 use log::{debug, warn};
-use reqwest::Client;
+use rand::Rng;
+use reqwest::{Client, StatusCode};
+use serde::Deserialize;
+use tokio::time::{self, Duration};
 use url::Url;
 
 use crate::core::GenericResult;
 
 use self::resources::{Resource, Sitemap};
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrawlerConfig {
+    #[serde(with = "humantime_serde")]
+    pub max_period: Duration,
+
+    #[serde(with = "humantime_serde")]
+    pub max_delay: Duration,
+}
+
 pub struct Crawler {
     sitemap: Url,
+    max_period: Duration,
+    max_delay: Duration,
+
     client: Client, // FIXME(konishchev): Limit pool lifetime
     queue: CrawlQueue,
 }
 
 impl Crawler {
-    pub fn new(sitemap: &Url) -> GenericResult<Crawler> {
+    pub fn new(sitemap: &Url, config: &CrawlerConfig) -> GenericResult<Crawler> {
         let client = Client::builder()
             .user_agent(format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")))
             // FIXME(konishchev): native-tls-vendored?
@@ -41,16 +58,33 @@ impl Crawler {
 
         Ok(Crawler {
             sitemap: sitemap.clone(),
+            max_period: config.max_period,
+            max_delay: config.max_delay,
+
             client,
             queue: CrawlQueue::new(),
         })
     }
 
     pub async fn run(&mut self) {
-        // FIXME(konishchev): Infinite loop with delays
-        self.queue.add(CrawlTask::new(self.sitemap.clone(), Sitemap::new()));
+        loop {
+            let task = self.queue.next().unwrap_or_else(|| {
+                CrawlTask::new(self.sitemap.clone(), Some(Delay::Crawl), Sitemap::new(self.sitemap.clone()))
+            });
 
-        while let Some(task) = self.queue.next() {
+            if let Some(delay_spec) = task.delay {
+                let max_delay = match delay_spec {
+                    Delay::Crawl => self.max_period,
+                    Delay::Page => self.max_delay,
+                };
+
+                let delay = rand::rng().random_range(Duration::ZERO..=max_delay);
+                debug!("Delaying {} {} crawling by {delay:.0?}...", task.resource.name(), task.url);
+
+                time::sleep(delay).await;
+            }
+
+            // FIXME(konishchev): Add metrics
             debug!("Crawling {} {}...", task.resource.name(), task.url);
             match self.process(&task).await {
                 Ok(size) => debug!("Fetched {}.", humansize::format_size(size, humansize::BINARY)),
@@ -60,21 +94,39 @@ impl Crawler {
     }
 
     async fn process(&mut self, task: &CrawlTask) -> GenericResult<u64> {
-        // FIXME(konishchev): Add checks
         let response = self.client.get(task.url.clone()).send().await?;
+
+        let url = response.url();
+        if url != &task.url {
+            debug!("The server redirected {} to {}.", task.url, url);
+        }
+
+        let status = response.status();
+        if status != StatusCode::OK {
+            return Err!("the server returned {status} status code");
+        }
+
         task.resource.process(response, &mut self.queue).await
     }
 }
 
+#[derive(Clone, Copy)]
+enum Delay {
+    Crawl,
+    Page,
+}
+
 struct CrawlTask {
     url: Url,
+    delay: Option<Delay>,
     resource: Box<dyn Resource>,
 }
 
 impl CrawlTask {
-    fn new<R: Resource + 'static>(url: Url, resource: R) -> CrawlTask {
+    fn new<R: Resource + 'static>(url: Url, delay: Option<Delay>, resource: R) -> CrawlTask {
         CrawlTask {
             url,
+            delay,
             resource: Box::new(resource),
         }
     }
@@ -91,11 +143,18 @@ impl CrawlQueue {
         }
     }
 
-    fn add(&mut self, task: CrawlTask) {
-        self.queue.push_back(task);
+    // FIXME(konishchev): Validate urls
+    // FIXME(konishchev): Deduplicate + limit?
+    fn add<R: Resource + 'static>(&mut self, url: Url, delay: Option<Delay>, resource: R) {
+        self.queue.push_back(CrawlTask::new(url, delay, resource));
     }
 
     fn next(&mut self) -> Option<CrawlTask> {
         self.queue.pop_front()
+    }
+
+    // FIXME(konishchev): Implement
+    fn on_error(&mut self, message: fmt::Arguments) {
+        warn!("{message}.");
     }
 }
