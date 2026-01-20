@@ -4,14 +4,14 @@ use url::Url;
 
 use crate::core::GenericResult;
 
-use super::{CrawlQueue, Delay};
+use super::{Crawler, Delay};
 use super::sitemap;
 use super::util;
 
 #[async_trait]
 pub trait Resource: Send + Sync {
     fn name(&self) -> &'static str;
-    async fn process(&self, response: Response, queue: &mut CrawlQueue) -> GenericResult<u64>;
+    async fn process(&self, crawler: &mut Crawler, response: Response) -> GenericResult<u64>;
 }
 
 pub struct Sitemap {
@@ -30,7 +30,7 @@ impl Resource for Sitemap {
         "sitemap"
     }
 
-    async fn process(&self, mut response: Response, queue: &mut CrawlQueue) -> GenericResult<u64> {
+    async fn process(&self, crawler: &mut Crawler, mut response: Response) -> GenericResult<u64> {
         let sitemap_url = response.url().clone();
         if !util::validate_url_base(&self.url, &sitemap_url) {
             return Err!("got an unexpected sitemap redirect: {} -> {}", self.url, sitemap_url);
@@ -55,9 +55,9 @@ impl Resource for Sitemap {
             sitemap::Sitemap::Index(index) => {
                 for inner_sitemap in index.sitemaps {
                     if util::validate_url_base(&sitemap_url, &inner_sitemap.location) {
-                        queue.add(inner_sitemap.location.clone(), None, Sitemap::new(inner_sitemap.location));
+                        crawler.add(inner_sitemap.location.clone(), None, Sitemap::new(inner_sitemap.location));
                     } else {
-                        queue.on_error(format_args!(
+                        crawler.on_error(format_args!(
                             "Sitemap {sitemap_url} refers an invalid inner sitemap URL {}",
                             inner_sitemap.location));
                     }
@@ -67,9 +67,9 @@ impl Resource for Sitemap {
             sitemap::Sitemap::UrlSet(sitemap) => {
                 for entry in sitemap.urls {
                     if util::validate_url_base(&sitemap_url, &entry.location) {
-                        queue.add(entry.location, Some(Delay::Page), Page::new());
+                        crawler.add(entry.location, Some(Delay::Page), Page::new());
                     } else {
-                        queue.on_error(format_args!("Sitemap {sitemap_url} refers an invalid URL {}", entry.location));
+                        crawler.on_error(format_args!("Sitemap {sitemap_url} refers an invalid URL {}", entry.location));
                     }
                 }
             },
@@ -94,7 +94,7 @@ impl Resource for Page {
         "page"
     }
 
-    async fn process(&self, mut response: Response, _queue: &mut CrawlQueue) -> GenericResult<u64> {
+    async fn process(&self, _crawler: &mut Crawler, mut response: Response,) -> GenericResult<u64> {
         let mut size = 0;
 
         while let Some(chunk) = response.chunk().await? {

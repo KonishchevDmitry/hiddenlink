@@ -35,7 +35,7 @@ pub struct Crawler {
     max_delay: Duration,
 
     client: Client, // FIXME(konishchev): Limit pool lifetime
-    queue: CrawlQueue,
+    queue: VecDeque<CrawlTask>,
 }
 
 impl Crawler {
@@ -62,13 +62,13 @@ impl Crawler {
             max_delay: config.max_delay,
 
             client,
-            queue: CrawlQueue::new(),
+            queue: VecDeque::new(),
         })
     }
 
     pub async fn run(&mut self) {
         loop {
-            let task = self.queue.next().unwrap_or_else(|| {
+            let task = self.queue.pop_front().unwrap_or_else(|| {
                 CrawlTask::new(self.sitemap.clone(), Some(Delay::Crawl), Sitemap::new(self.sitemap.clone()))
             });
 
@@ -84,11 +84,17 @@ impl Crawler {
                 time::sleep(delay).await;
             }
 
-            // FIXME(konishchev): Add metrics
             debug!("Crawling {} {}...", task.resource.name(), task.url);
+
+            let queue_size_before = self.queue.len();
             match self.process(&task).await {
                 Ok(size) => debug!("Fetched {}.", humansize::format_size(size, humansize::BINARY)),
-                Err(err) => warn!("Failed to fetch {}: {err}.", task.url)
+                Err(err) => self.on_error(format_args!("Failed to fetch {}: {err}", task.url)),
+            }
+
+            let queue_size_after = self.queue.len();
+            if queue_size_after > queue_size_before {
+                debug!("{} tasks have been added to the crawl queue.", queue_size_after - queue_size_before);
             }
         }
     }
@@ -106,7 +112,19 @@ impl Crawler {
             return Err!("the server returned {status} status code");
         }
 
-        task.resource.process(response, &mut self.queue).await
+        task.resource.process(self, response).await
+    }
+
+    // FIXME(konishchev): Validate urls
+    // FIXME(konishchev): Deduplicate + limit?
+    fn add<R: Resource + 'static>(&mut self, url: Url, delay: Option<Delay>, resource: R) {
+        self.queue.push_back(CrawlTask::new(url, delay, resource));
+    }
+
+    // FIXME(konishchev): Metrics
+    // FIXME(konishchev): Request time metrics
+    fn on_error(&mut self, message: fmt::Arguments) {
+        warn!("{message}.");
     }
 }
 
@@ -129,32 +147,5 @@ impl CrawlTask {
             delay,
             resource: Box::new(resource),
         }
-    }
-}
-
-struct CrawlQueue {
-    queue: VecDeque<CrawlTask>,
-}
-
-impl CrawlQueue {
-    fn new() -> CrawlQueue {
-        CrawlQueue {
-            queue: VecDeque::new(),
-        }
-    }
-
-    // FIXME(konishchev): Validate urls
-    // FIXME(konishchev): Deduplicate + limit?
-    fn add<R: Resource + 'static>(&mut self, url: Url, delay: Option<Delay>, resource: R) {
-        self.queue.push_back(CrawlTask::new(url, delay, resource));
-    }
-
-    fn next(&mut self) -> Option<CrawlTask> {
-        self.queue.pop_front()
-    }
-
-    // FIXME(konishchev): Implement
-    fn on_error(&mut self, message: fmt::Arguments) {
-        warn!("{message}.");
     }
 }
