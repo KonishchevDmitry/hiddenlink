@@ -14,12 +14,13 @@ use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use tokio::time::{self, Duration};
 use url::Url;
+use validator::Validate;
 
 use crate::core::GenericResult;
 
 use self::resources::{Resource, Sitemap};
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct CrawlerConfig {
     #[serde(with = "humantime_serde")]
@@ -27,41 +28,26 @@ pub struct CrawlerConfig {
 
     #[serde(with = "humantime_serde")]
     pub max_delay: Duration,
+
+    #[validate(range(min = 1))]
+    pub max_client_capacity: Option<usize>,
 }
 
 pub struct Crawler {
     sitemap: Url,
-    max_period: Duration,
-    max_delay: Duration,
+    config: CrawlerConfig,
 
-    client: Client, // FIXME(konishchev): Limit pool lifetime
+    client: Option<LimitedClient>,
     queue: VecDeque<CrawlTask>,
 }
 
 impl Crawler {
     pub fn new(sitemap: &Url, config: &CrawlerConfig) -> GenericResult<Crawler> {
-        let client = Client::builder()
-            .user_agent(format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")))
-            // FIXME(konishchev): native-tls-vendored?
-            // .tls_backend_native()
-            .http1_title_case_headers()
-            // FIXME(konishchev): Custom resolver or hickory-dns?
-            // .dns_resolver()
-            // Browsers send Accept-Encoding header by default, so do we
-            // FIXME(konishchev): Compare default headers
-            .brotli(true).deflate(true).gzip(true).zstd(true)
-            // FIXME(konishchev): Derive from browser settings
-            // .timeout(timeout).read_timeout(timeout).connect_timeout(timeout)
-            .no_proxy()
-            .https_only(true) // FIXME(konishchev): Enable?
-            .build()?;
-
         Ok(Crawler {
             sitemap: sitemap.clone(),
-            max_period: config.max_period,
-            max_delay: config.max_delay,
+            config: config.clone(),
 
-            client,
+            client: None,
             queue: VecDeque::new(),
         })
     }
@@ -69,13 +55,18 @@ impl Crawler {
     pub async fn run(&mut self) {
         loop {
             let task = self.queue.pop_front().unwrap_or_else(|| {
+                // Even when client capacity is not configured, we don't want to use a single connection all the time,
+                // so reset it at least on each scrape start.
+                if self.client.take().is_some() {
+                    debug!("Drop previous crawler client due to new crawling iteration.");
+                }
                 CrawlTask::new(self.sitemap.clone(), Some(Delay::Crawl), Sitemap::new(self.sitemap.clone()))
             });
 
             if let Some(delay_spec) = task.delay {
                 let max_delay = match delay_spec {
-                    Delay::Crawl => self.max_period,
-                    Delay::Page => self.max_delay,
+                    Delay::Crawl => self.config.max_period,
+                    Delay::Page => self.config.max_delay,
                 };
 
                 let delay = rand::rng().random_range(Duration::ZERO..=max_delay);
@@ -99,8 +90,21 @@ impl Crawler {
         }
     }
 
+    // FIXME(konishchev): Validate urls
+    // FIXME(konishchev): Deduplicate + limit?
+    fn add<R: Resource + 'static>(&mut self, url: Url, delay: Option<Delay>, resource: R) {
+        self.queue.push_back(CrawlTask::new(url, delay, resource));
+    }
+
+    // FIXME(konishchev): Metrics
+    // FIXME(konishchev): Request time metrics
+    fn on_error(&mut self, message: fmt::Arguments) {
+        warn!("{message}.");
+    }
+
     async fn process(&mut self, task: &CrawlTask) -> GenericResult<u64> {
-        let response = self.client.get(task.url.clone()).send().await?;
+        let cost = task.delay.map(|_| 1).unwrap_or_default();
+        let response = self.client(cost)?.get(task.url.clone()).send().await?;
 
         let url = response.url();
         if url != &task.url {
@@ -115,16 +119,46 @@ impl Crawler {
         task.resource.process(self, response).await
     }
 
-    // FIXME(konishchev): Validate urls
-    // FIXME(konishchev): Deduplicate + limit?
-    fn add<R: Resource + 'static>(&mut self, url: Url, delay: Option<Delay>, resource: R) {
-        self.queue.push_back(CrawlTask::new(url, delay, resource));
-    }
+    fn client<'a>(&'a mut self, cost: usize) -> GenericResult<Client> {
+        if let Some(limited_client) = self.client.as_mut() {
+            let Some(capacity) = limited_client.capacity else {
+                return Ok(limited_client.client.clone());
+            };
 
-    // FIXME(konishchev): Metrics
-    // FIXME(konishchev): Request time metrics
-    fn on_error(&mut self, message: fmt::Arguments) {
-        warn!("{message}.");
+            // We want zero cost requests to reuse current client
+            limited_client.used_capacity += cost;
+            if limited_client.used_capacity <= capacity {
+                return Ok(limited_client.client.clone());
+            }
+
+            debug!("Crawler client has reached its capacity ({capacity}). Recreate it.");
+        }
+
+        let client = Client::builder()
+            .user_agent(format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")))
+            // FIXME(konishchev): native-tls-vendored?
+            // .tls_backend_native()
+            .http1_title_case_headers()
+            // FIXME(konishchev): Custom resolver or hickory-dns?
+            // .dns_resolver()
+            // Browsers send Accept-Encoding header by default, so do we
+            // FIXME(konishchev): Compare default headers
+            .brotli(true).deflate(true).gzip(true).zstd(true)
+            // FIXME(konishchev): Derive from browser settings
+            // .timeout(timeout).read_timeout(timeout).connect_timeout(timeout)
+            .no_proxy()
+            .https_only(true) // FIXME(konishchev): Enable?
+            .build()?;
+
+        self.client.replace(LimitedClient {
+            client: client.clone(),
+            capacity: self.config.max_client_capacity.map(|capacity| {
+                rand::rng().random_range(1..=capacity)
+            }),
+            used_capacity: cost,
+        });
+
+        Ok(client)
     }
 }
 
@@ -148,4 +182,10 @@ impl CrawlTask {
             resource: Box::new(resource),
         }
     }
+}
+
+struct LimitedClient {
+    client: Client,
+    capacity: Option<usize>,
+    used_capacity: usize,
 }
