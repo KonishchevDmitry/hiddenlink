@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rand::seq::SliceRandom;
 use reqwest::Response;
 use url::Url;
 
@@ -51,10 +52,12 @@ impl Resource for Sitemap {
             data.extend_from_slice(&chunk);
         }
 
-        // XXX(konishchev): Randomize
         match sitemap::parse(&data)? {
             sitemap::Sitemap::Index(index) => {
-                for inner_sitemap in index.sitemaps {
+                let mut inner_sitemaps = index.sitemaps;
+                inner_sitemaps.shuffle(&mut rand::rng());
+
+                for inner_sitemap in inner_sitemaps {
                     if util::validate_url_base(&sitemap_url, &inner_sitemap.location) {
                         crawler.add(inner_sitemap.location.clone(), None, Sitemap::new(inner_sitemap.location));
                     } else {
@@ -66,7 +69,10 @@ impl Resource for Sitemap {
             },
 
             sitemap::Sitemap::UrlSet(sitemap) => {
-                for entry in sitemap.urls {
+                let mut entries = sitemap.urls;
+                entries.shuffle(&mut rand::rng());
+
+                for entry in entries {
                     if util::validate_url_base(&sitemap_url, &entry.location) {
                         crawler.add(entry.location, Some(Delay::Page), Page::new());
                     } else {
