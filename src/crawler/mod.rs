@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 
-use log::{debug, warn};
+use log::{debug, info, warn};
 use rand::Rng;
 use reqwest::{Client, StatusCode};
 use rustls::pki_types::DnsName;
@@ -22,6 +22,7 @@ use crate::core::GenericResult;
 
 use self::resources::{Resource, Sitemap};
 
+// FIXME(konishchev): Multiple crawlers?
 #[derive(Clone, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct CrawlerConfig {
@@ -72,6 +73,8 @@ impl Crawler {
     }
 
     pub async fn run(&mut self) {
+        info!("The crawler is started for {}.", self.sitemap);
+
         loop {
             let task = self.queue.pop_front().unwrap_or_else(|| {
                 // Even when client capacity is not configured, we don't want to use a single connection all the time,

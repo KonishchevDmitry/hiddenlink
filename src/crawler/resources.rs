@@ -101,6 +101,7 @@ impl Resource for Page {
         "page"
     }
 
+    // FIXME(konishchev): Crawl page resources
     async fn process(&self, _crawler: &mut Crawler, mut response: Response,) -> GenericResult<u64> {
         let mut size = 0;
 
