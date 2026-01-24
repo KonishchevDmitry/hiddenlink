@@ -51,6 +51,7 @@ impl Resource for Sitemap {
             data.extend_from_slice(&chunk);
         }
 
+        // XXX(konishchev): Randomize
         match sitemap::parse(&data)? {
             sitemap::Sitemap::Index(index) => {
                 for inner_sitemap in index.sitemaps {

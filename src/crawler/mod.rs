@@ -1,11 +1,13 @@
 #![allow(dead_code)] // FIXME(konishchev): Drop it
 // Creates an additional noise by crawling the peer to mask the tunnel connections among real HTTPS connections
 
+mod client;
 mod resources;
 mod sitemap;
 mod util;
 
 use std::collections::VecDeque;
+use std::error::Error;
 use std::fmt;
 
 use log::{debug, warn};
@@ -23,6 +25,9 @@ use self::resources::{Resource, Sitemap};
 #[derive(Clone, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct CrawlerConfig {
+    #[validate(length(min = 1))]
+    pub sitemap_path: String,
+
     #[serde(with = "humantime_serde")]
     pub max_period: Duration,
 
@@ -34,6 +39,7 @@ pub struct CrawlerConfig {
 }
 
 pub struct Crawler {
+    base: Url,
     sitemap: Url,
     config: CrawlerConfig,
 
@@ -42,9 +48,17 @@ pub struct Crawler {
 }
 
 impl Crawler {
-    pub fn new(sitemap: &Url, config: &CrawlerConfig) -> GenericResult<Crawler> {
+    pub fn new(domain: &str, config: &CrawlerConfig) -> GenericResult<Crawler> {
+        let mut base = Url::parse("https://localhost/")?; // url crate has no URL builder
+        base.set_host(Some(domain)).map_err(|_| format!(
+            "Invalid domain name: {domain:?}"))?;
+
+        let sitemap = base.join(&config.sitemap_path).map_err(|_| format!(
+            "Invalid sitemap path: {:?}", config.sitemap_path))?;
+
         Ok(Crawler {
-            sitemap: sitemap.clone(),
+            base,
+            sitemap,
             config: config.clone(),
 
             client: None,
@@ -91,7 +105,7 @@ impl Crawler {
     }
 
     // FIXME(konishchev): Validate urls
-    // FIXME(konishchev): Deduplicate + limit?
+    // FIXME(konishchev): Deduplicate (redirects?) + limit?
     fn add<R: Resource + 'static>(&mut self, url: Url, delay: Option<Delay>, resource: R) {
         self.queue.push_back(CrawlTask::new(url, delay, resource));
     }
@@ -103,13 +117,23 @@ impl Crawler {
     }
 
     async fn process(&mut self, task: &CrawlTask) -> GenericResult<u64> {
-        let cost = task.delay.map(|_| 1).unwrap_or_default();
-        let response = self.client(cost)?.get(task.url.clone()).send().await?;
-
-        let url = response.url();
-        if url != &task.url {
-            debug!("The server redirected {} to {}.", task.url, url);
+        let url = &task.url;
+        if !util::validate_url_base(&self.base, url) {
+            return Err!("an attempt to crawl outside of the base url: {url}");
         }
+
+        let cost = task.delay.map(|_| 1).unwrap_or_default();
+        let response = self.client(cost)?.get(url.clone()).send().await.map_err(|err| {
+            let err = err.without_url();
+
+            // reqwest/hyper errors hide all details, so extract the underlying error
+            let mut err: &dyn Error = &err;
+            while let Some(source) = err.source() {
+                err = source;
+            }
+
+            err.to_string()
+        })?;
 
         let status = response.status();
         if status != StatusCode::OK {
@@ -119,7 +143,7 @@ impl Crawler {
         task.resource.process(self, response).await
     }
 
-    fn client<'a>(&'a mut self, cost: usize) -> GenericResult<Client> {
+    fn client(&mut self, cost: usize) -> GenericResult<Client> {
         if let Some(limited_client) = self.client.as_mut() {
             let Some(capacity) = limited_client.capacity else {
                 return Ok(limited_client.client.clone());
@@ -134,31 +158,15 @@ impl Crawler {
             debug!("Crawler client has reached its capacity ({capacity}). Recreate it.");
         }
 
-        let client = Client::builder()
-            .user_agent(format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")))
-            // FIXME(konishchev): native-tls-vendored?
-            // .tls_backend_native()
-            .http1_title_case_headers()
-            // FIXME(konishchev): Custom resolver or hickory-dns?
-            // .dns_resolver()
-            // Browsers send Accept-Encoding header by default, so do we
-            // FIXME(konishchev): Compare default headers
-            .brotli(true).deflate(true).gzip(true).zstd(true)
-            // FIXME(konishchev): Derive from browser settings
-            // .timeout(timeout).read_timeout(timeout).connect_timeout(timeout)
-            .no_proxy()
-            .https_only(true) // FIXME(konishchev): Enable?
-            .build()?;
-
-        self.client.replace(LimitedClient {
-            client: client.clone(),
+        let limited_client = self.client.insert(LimitedClient {
+            client: client::new_client(&self.base)?,
             capacity: self.config.max_client_capacity.map(|capacity| {
                 rand::rng().random_range(1..=capacity)
             }),
             used_capacity: cost,
         });
 
-        Ok(client)
+        Ok(limited_client.client.clone())
     }
 }
 
