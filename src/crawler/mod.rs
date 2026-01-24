@@ -1,4 +1,3 @@
-#![allow(dead_code)] // FIXME(konishchev): Drop it
 // Creates an additional noise by crawling the peer to mask the tunnel connections among real HTTPS connections
 
 mod client;
@@ -13,6 +12,7 @@ use std::fmt;
 use log::{debug, warn};
 use rand::Rng;
 use reqwest::{Client, StatusCode};
+use rustls::pki_types::DnsName;
 use serde::Deserialize;
 use tokio::time::{self, Duration};
 use url::Url;
@@ -25,6 +25,9 @@ use self::resources::{Resource, Sitemap};
 #[derive(Clone, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct CrawlerConfig {
+    #[validate(length(min = 1))]
+    pub domain: String,
+
     #[validate(length(min = 1))]
     pub sitemap_path: String,
 
@@ -48,10 +51,12 @@ pub struct Crawler {
 }
 
 impl Crawler {
-    pub fn new(domain: &str, config: &CrawlerConfig) -> GenericResult<Crawler> {
+    pub fn new(config: &CrawlerConfig) -> GenericResult<Crawler> {
         let mut base = Url::parse("https://localhost/")?; // url crate has no URL builder
-        base.set_host(Some(domain)).map_err(|_| format!(
-            "Invalid domain name: {domain:?}"))?;
+
+        DnsName::try_from(config.domain.as_str()).ok().and_then(|domain| {
+            base.set_host(Some(domain.as_ref())).ok()
+        }).ok_or_else(|| format!("Invalid domain name: {:?}", config.domain))?;
 
         let sitemap = base.join(&config.sitemap_path).map_err(|_| format!(
             "Invalid sitemap path: {:?}", config.sitemap_path))?;

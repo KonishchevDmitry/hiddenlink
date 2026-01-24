@@ -24,6 +24,7 @@ use prometheus_client::{metrics::counter::Counter, registry::Registry};
 use crate::config::Config;
 use crate::controller::Controller;
 use crate::core::EmptyResult;
+use crate::crawler::Crawler;
 use crate::metrics::ArcCollector;
 
 fn main() {
@@ -66,6 +67,7 @@ async fn run(config_path: &Path, error_counter: Counter) -> EmptyResult {
         "Error while reading {:?} configuration file: {}", config_path, e))?;
 
     let controller = Arc::new(Controller::new(&config).await?);
+    let crawler = config.crawler.as_ref().map(Crawler::new).transpose()?;
     let mut metrics_server: Box<dyn Future<Output=_> + Unpin> = Box::new(std::future::pending());
 
     if let Some(metrics_bind_address) = config.metrics_bind_address {
@@ -79,6 +81,12 @@ async fn run(config_path: &Path, error_counter: Counter) -> EmptyResult {
 
     tokio::try_join!(
         controller.handle(),
+        async move {
+            if let Some(mut crawler) = crawler {
+                crawler.run().await;
+            }
+            Ok(())
+        },
         async move {
             metrics_server.as_mut().await.unwrap().map_err(|e| format!(
                 "Metrics server has crashed: {e}").into())

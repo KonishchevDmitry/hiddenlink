@@ -7,6 +7,7 @@ use validator::{Validate, ValidationErrors};
 
 use crate::core::GenericResult;
 
+pub use crate::crawler::CrawlerConfig;
 pub use crate::transport::http::{HttpClientTransportConfig, HttpServerTransportConfig};
 pub use crate::transport::udp::{InsecureUdpTransportConfig, SecureUdpTransportConfig};
 
@@ -22,6 +23,7 @@ pub struct Config {
     #[validate(nested)]
     #[validate(length(min = 1))]
     pub transports: Vec<TransportSpec>,
+    pub crawler: Option<CrawlerConfig>,
 
     pub metrics_bind_address: Option<SocketAddr>,
 }
