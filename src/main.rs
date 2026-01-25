@@ -25,7 +25,6 @@ use crate::config::Config;
 use crate::controller::Controller;
 use crate::core::EmptyResult;
 use crate::crawler::Crawler;
-use crate::metrics::ArcCollector;
 
 fn main() {
     let args = cli::parse_args().unwrap_or_else(|e| {
@@ -74,7 +73,7 @@ async fn run(config_path: &Path, error_counter: Counter) -> EmptyResult {
         let mut registry = Registry::with_prefix("hiddenlink");
 
         registry.register("errors", "Error count", error_counter);
-        registry.register_collector(ArcCollector::new(controller.clone()));
+        registry.register_collector(Box::new(controller.clone()));
 
         metrics_server = Box::new(metrics::server::run(metrics_bind_address, registry).await?);
     }
