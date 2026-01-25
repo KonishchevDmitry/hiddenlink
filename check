@@ -6,10 +6,18 @@
 set -eu
 
 echo "Running clippy checks..."
-
 for profile in dev release; do
     cargo clippy --workspace --all-targets --all-features --no-deps --profile "$profile" -- -Dwarnings
 done
 
 echo -e "\nRunning tests..."
 cargo test
+
+# reqwest has no option to disable HTTP3, so ensure that it won't be suddenly enabled by default in the future
+echo -e "\nChecking reqwest features..."
+if cargo tree -i reqwest -e features | grep -A1 http3 >&2; then
+    echo "Error: http3 is enabled in reqwest." >&2
+    exit 1
+fi
+
+echo -e "\nAll is OK."
