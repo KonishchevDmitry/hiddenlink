@@ -86,12 +86,21 @@ impl Crawler {
                 // Even when client capacity is not configured, we don't want to use a single connection all the time,
                 // so reset it at least on each scrape start.
                 if self.client.take().is_some() {
+                    self.metrics.active_connections.dec();
                     debug!("Drop previous crawler client due to new crawling iteration.");
                 }
                 CrawlTask::new(self.sitemap.clone(), Some(Delay::Crawl), Sitemap::new(self.sitemap.clone()))
             });
 
             if let Some(delay_spec) = task.delay {
+                // We want to have periods with no open TCP connection
+                if let Some(ref client) = self.client &&
+                    let Some(capacity) = client.capacity && client.used_capacity >= capacity {
+                    debug!("Crawler client has reached its capacity ({capacity}). Close it.");
+                    self.metrics.active_connections.dec();
+                    self.client = None;
+                }
+
                 let max_delay = match delay_spec {
                     Delay::Crawl => self.config.max_period,
                     Delay::Page => self.config.max_delay,
@@ -122,11 +131,6 @@ impl Crawler {
     // FIXME(konishchev): Deduplicate (redirects?) + limit?
     fn add<R: Resource + 'static>(&mut self, url: Url, delay: Option<Delay>, resource: R) {
         self.queue.push_back(CrawlTask::new(url, delay, resource));
-    }
-
-    fn on_error(&mut self, message: fmt::Arguments) {
-        self.metrics.errors.inc();
-        warn!("{message}.");
     }
 
     async fn process(&mut self, task: &CrawlTask) -> GenericResult<u64> {
@@ -175,6 +179,8 @@ impl Crawler {
             }
 
             debug!("Crawler client has reached its capacity ({capacity}). Recreate it.");
+            self.metrics.active_connections.dec();
+            self.client = None;
         }
 
         let limited_client = self.client.insert(LimitedClient {
@@ -185,7 +191,17 @@ impl Crawler {
             used_capacity: cost,
         });
 
+        // Please note that it actually doesn't guarantee TCP connection creation, but we don't have an access to
+        // client's pool, so expose as much information as we can now.
+        self.metrics.new_connections.inc();
+        self.metrics.active_connections.inc();
+
         Ok(limited_client.client.clone())
+    }
+
+    fn on_error(&mut self, message: fmt::Arguments) {
+        self.metrics.errors.inc();
+        warn!("{message}.");
     }
 }
 

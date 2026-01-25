@@ -37,6 +37,7 @@ pub fn new_client(base_url: &Url) -> GenericResult<Client> {
         .brotli(true).deflate(true).gzip(true).zstd(true) // Browsers send Accept-Encoding header by default, so do we
         .redirect(Policy::custom(secured_redirect_policy))
         .timeout(http::CONNECTION_TIMEOUT)
+        .pool_idle_timeout(None) // We want to manually control TCP connection lifetime
         .build()?
     )
 }
