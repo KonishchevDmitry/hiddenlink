@@ -1,6 +1,7 @@
 // Creates an additional noise by crawling the peer to mask the tunnel connections among real HTTPS connections
 
 mod client;
+mod metrics;
 mod resources;
 mod sitemap;
 mod util;
@@ -8,6 +9,8 @@ mod util;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
+use std::time::Instant;
 
 use log::{debug, info, warn};
 use rand::Rng;
@@ -20,6 +23,7 @@ use validator::Validate;
 
 use crate::core::GenericResult;
 
+pub use self::metrics::CrawlerMetrics;
 use self::resources::{Resource, Sitemap};
 
 // FIXME(konishchev): Multiple crawlers?
@@ -47,8 +51,9 @@ pub struct Crawler {
     sitemap: Url,
     config: CrawlerConfig,
 
-    client: Option<LimitedClient>,
     queue: VecDeque<CrawlTask>,
+    client: Option<LimitedClient>,
+    pub metrics: Arc<CrawlerMetrics>
 }
 
 impl Crawler {
@@ -67,8 +72,9 @@ impl Crawler {
             sitemap,
             config: config.clone(),
 
-            client: None,
             queue: VecDeque::new(),
+            client: None,
+            metrics: Arc::new(CrawlerMetrics::new()),
         })
     }
 
@@ -118,9 +124,8 @@ impl Crawler {
         self.queue.push_back(CrawlTask::new(url, delay, resource));
     }
 
-    // FIXME(konishchev): Metrics
-    // FIXME(konishchev): Request time metrics
     fn on_error(&mut self, message: fmt::Arguments) {
+        self.metrics.errors.inc();
         warn!("{message}.");
     }
 
@@ -131,7 +136,13 @@ impl Crawler {
         }
 
         let cost = task.delay.map(|_| 1).unwrap_or_default();
-        let response = self.client(cost)?.get(url.clone()).send().await.map_err(|err| {
+        let request = self.client(cost)?.get(url.clone());
+
+        let start_time = Instant::now();
+        let result = request.send().await;
+        self.metrics.request_times.observe(start_time.elapsed().as_secs_f64());
+
+        let response = result.map_err(|err| {
             let err = err.without_url();
 
             // reqwest/hyper errors hide all details, so extract the underlying error

@@ -75,6 +75,10 @@ async fn run(config_path: &Path, error_counter: Counter) -> EmptyResult {
         registry.register("errors", "Error count", error_counter);
         registry.register_collector(Box::new(controller.clone()));
 
+        if let Some(ref crawler) = crawler {
+            registry.register_collector(Box::new(crawler.metrics.clone()));
+        }
+
         metrics_server = Box::new(metrics::server::run(metrics_bind_address, registry).await?);
     }
 
