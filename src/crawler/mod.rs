@@ -1,6 +1,13 @@
-// Creates an additional noise by crawling the peer to mask the tunnel connections among real HTTPS connections
+// Creates an additional noise by crawling the peer to mask the tunnel connections among real HTTPS connections.
+//
+// In 2026 browsers behave as follows:
+// 1. Open a single HTTP/2 connection.
+// 2. Keep it open around one minute when idle.
+//
+// For this reason we don't implement multiple crawlers now – it seems that it won't make any better for us.
 
 mod client;
+mod html;
 mod metrics;
 mod resources;
 mod sitemap;
@@ -26,7 +33,6 @@ use crate::core::GenericResult;
 pub use self::metrics::CrawlerMetrics;
 use self::resources::{Resource, Sitemap};
 
-// FIXME(konishchev): Multiple crawlers?
 #[derive(Clone, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct CrawlerConfig {

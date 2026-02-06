@@ -1,6 +1,9 @@
+use std::str::FromStr;
+
 use async_trait::async_trait;
+use mime::Mime;
 use rand::seq::SliceRandom;
-use reqwest::Response;
+use reqwest::{header, Response};
 use url::Url;
 
 use crate::core::GenericResult;
@@ -31,26 +34,13 @@ impl Resource for Sitemap {
         "sitemap"
     }
 
-    async fn process(&self, crawler: &mut Crawler, mut response: Response) -> GenericResult<u64> {
+    async fn process(&self, crawler: &mut Crawler, response: Response) -> GenericResult<u64> {
         let sitemap_url = response.url().clone();
         if !util::validate_url_base(&self.url, &sitemap_url) {
             return Err!("got an unexpected sitemap redirect: {} -> {}", self.url, sitemap_url);
         }
 
-        let mut data = Vec::new();
-        if let Some(size) = response.content_length() {
-            if size > sitemap::SIZE_LIMIT {
-                return Err!("sitemap size limit is exceeded");
-            }
-            data.reserve_exact(size as usize);
-        }
-
-        while let Some(chunk) = response.chunk().await? {
-            if (data.len() + chunk.len()) as u64 > sitemap::SIZE_LIMIT {
-                return Err!("sitemap size limit is exceeded");
-            }
-            data.extend_from_slice(&chunk);
-        }
+        let data = read_response("sitemap", response, sitemap::SIZE_LIMIT).await?;
 
         match sitemap::parse(&data)? {
             sitemap::Sitemap::Index(index) => {
@@ -101,14 +91,78 @@ impl Resource for Page {
         "page"
     }
 
-    // FIXME(konishchev): Crawl page resources
-    async fn process(&self, _crawler: &mut Crawler, mut response: Response,) -> GenericResult<u64> {
+    async fn process(&self, crawler: &mut Crawler, response: Response) -> GenericResult<u64> {
+        match get_content_type(&response) {
+            Ok(content_type) if content_type.type_() == mime::TEXT && content_type.subtype() == mime::HTML => {
+                // FIXME(konishchev): Crawl page resources
+                Asset::new().process(crawler, response).await
+            },
+            Ok(content_type) => {
+                crawler.on_error(format_args!("Got an unexpected content type for {} page: {content_type}", response.url()));
+                Asset::new().process(crawler, response).await
+            },
+            Err(err) => {
+                crawler.on_error(format_args!("Failed to process {} page: {err}", response.url()));
+                Asset::new().process(crawler, response).await
+            },
+        }
+    }
+}
+
+struct Asset {
+}
+
+impl Asset {
+    fn new() -> Asset {
+        Asset {}
+    }
+}
+
+#[async_trait]
+impl Resource for Asset {
+    fn name(&self) -> &'static str {
+        "asset"
+    }
+
+    async fn process(&self, _crawler: &mut Crawler, mut response: Response) -> GenericResult<u64> {
         let mut size = 0;
 
+        // XXX(konishchev): Size limit
         while let Some(chunk) = response.chunk().await? {
             size += chunk.len() as u64;
         }
 
         Ok(size)
     }
+}
+
+fn get_content_type(response: &Response) -> GenericResult<Mime> {
+    let value = response.headers().get(header::CONTENT_TYPE)
+        .ok_or("Content-Type header is missing")?;
+
+    let content_type = value.to_str().ok()
+        .and_then(|value| Mime::from_str(value).ok())
+        .ok_or_else(|| format!("invalid Content-Type: {value:?}"))?;
+
+    Ok(content_type)
+}
+
+async fn read_response(name: &str, mut response: Response, size_limit: u64) -> GenericResult<Vec<u8>> {
+    let mut data = Vec::new();
+
+    if let Some(size) = response.content_length() {
+        if size > size_limit {
+            return Err!("{name} size limit is exceeded");
+        }
+        data.reserve_exact(size as usize);
+    }
+
+    while let Some(chunk) = response.chunk().await? {
+        if (data.len() + chunk.len()) as u64 > size_limit {
+            return Err!("{name} size limit is exceeded");
+        }
+        data.extend_from_slice(&chunk);
+    }
+
+    Ok(data)
 }
