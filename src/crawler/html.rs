@@ -1,17 +1,24 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use log::{Level, log_enabled, trace};
 use scraper::{Html, HtmlTreeSink};
 use tendril::TendrilSink;
 use url::Url;
 
-use crate::core::GenericResult;
-
 use super::util;
 
 pub const SIZE_LIMIT: u64 = 1024 * 1024;
 
-pub fn find_resources(page_url: &Url, data: &[u8], filter: &Url) -> GenericResult<impl Iterator<Item=Url>> {
+#[derive(Clone, Copy, PartialEq, PartialOrd, strum::Display)]
+#[strum(serialize_all = "kebab-case")]
+pub enum ResourceSource {
+    // Please note that the variant order defines override priority
+    Image,
+    Link,
+    Other,
+}
+
+pub fn find_resources(page_url: &Url, data: &[u8], filter: &Url) -> impl Iterator<Item=(Url, ResourceSource)> {
     // Html::parse_document() can't parse bytes - only strings are supported, so parse it manually
     let parser = html5ever::parse_document(HtmlTreeSink::new(Html::new_document()), Default::default());
     let document = parser.from_utf8().one(data);
@@ -23,7 +30,7 @@ pub fn find_resources(page_url: &Url, data: &[u8], filter: &Url) -> GenericResul
         }
     }
 
-    let mut resources = HashSet::new();
+    let mut resources = HashMap::new();
     let mut filtered_out = HashSet::new();
 
     trace!("Resource finder:");
@@ -33,9 +40,17 @@ pub fn find_resources(page_url: &Url, data: &[u8], filter: &Url) -> GenericResul
         for attribute in ["href", "src"] {
             if let Some(link) = element.attr(attribute) && !link.is_empty() {
                 if let Some(url) = parse_resource_link(page_url, link, Some(filter)) && &url != page_url {
-                    if resources.insert(url.clone()) {
-                        trace!("* Found: {url}");
-                    }
+                    let source = match (element.value().name(), attribute) {
+                        ("a", "href") => ResourceSource::Link,
+                        ("img", "src") => ResourceSource::Image,
+                        _ => ResourceSource::Other,
+                    };
+
+                    resources.entry(url).and_modify(|result| {
+                        if source < *result {
+                            *result = source;
+                        }
+                    }).or_insert(source);
                 } else if log_enabled!(Level::Trace) && filtered_out.insert(link) {
                     trace!("* Ignoring: {link}");
                 }
@@ -43,7 +58,13 @@ pub fn find_resources(page_url: &Url, data: &[u8], filter: &Url) -> GenericResul
         }
     }
 
-    Ok(resources.into_iter())
+    if log_enabled!(Level::Trace) {
+        for (url, source) in &resources {
+            trace!("* Found: {url} (source: {source})");
+        }
+    }
+
+    resources.into_iter()
 }
 
 fn parse_resource_link(base: &Url, link: &str, filter: Option<&Url>) -> Option<Url> {
