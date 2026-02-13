@@ -17,7 +17,7 @@ pub fn new_client(base_url: &Url) -> GenericResult<Client> {
         debug!("The crawling request to {} was redirected to {}.",
             attempt.previous().last().unwrap(), attempt.url());
 
-        if !util::validate_url_base(&base_url, attempt.url()) {
+        if util::validate_url_base(&base_url, attempt.url()).is_none() {
             let url = attempt.url().clone();
             return attempt.error(format!(
                 "got a redirect to {url} which is outside of the base URL ({base_url})"))

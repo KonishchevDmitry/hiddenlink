@@ -13,13 +13,13 @@ mod resources;
 mod sitemap;
 mod util;
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use log::{debug, info, warn};
+use log::{trace, debug, info, warn, error};
 use rand::Rng;
 use reqwest::{Client, StatusCode};
 use rustls::pki_types::DnsName;
@@ -58,6 +58,7 @@ pub struct Crawler {
     config: CrawlerConfig,
 
     queue: VecDeque<CrawlTask>,
+    crawled_resources: HashSet<String>,
     resource_type_cache: ResourceTypeCache,
 
     client: Option<LimitedClient>,
@@ -81,6 +82,7 @@ impl Crawler {
             config: config.clone(),
 
             queue: VecDeque::new(),
+            crawled_resources: HashSet::new(),
             resource_type_cache: ResourceTypeCache::new(&base),
 
             client: None,
@@ -93,13 +95,22 @@ impl Crawler {
 
         loop {
             let task = self.queue.pop_front().unwrap_or_else(|| {
+                if !self.crawled_resources.is_empty() {
+                    debug!("Crawling iteration has finished. {} resources have been processed.", self.crawled_resources.len());
+                    self.crawled_resources.clear();
+                }
+
                 // Even when client capacity is not configured, we don't want to use a single connection all the time,
                 // so reset it at least on each scrape start.
                 if self.client.take().is_some() {
                     self.metrics.active_connections.dec();
                     debug!("Drop previous crawler client due to new crawling iteration.");
                 }
-                CrawlTask::new(self.sitemap.clone(), Some(Delay::Crawl), Sitemap::new(self.sitemap.clone()))
+
+                let sitemap = self.sitemap.clone();
+                self.crawled_resources.insert(util::validate_url_base(&self.base, &sitemap).unwrap());
+
+                CrawlTask::new(sitemap.clone(), Some(Delay::Crawl), Sitemap::new(sitemap))
             });
 
             if let Some(delay_spec) = task.delay {
@@ -137,15 +148,35 @@ impl Crawler {
         }
     }
 
-    // FIXME(konishchev): Deduplicate (redirects?) + limit?
     fn add<R: Resource + 'static>(&mut self, url: Url, delay: Option<Delay>, resource: R) {
-        self.queue.push_back(CrawlTask::new(url, delay, resource));
+        let Some(path) = util::validate_url_base(&self.base, &url) else {
+            error!("An attempt to crawl outside of the base URL: {url}.");
+            return;
+        };
+
+        if !self.crawled_resources.insert(path.clone()) {
+            trace!("Skip queuing already crawled resource: {url}.");
+            return;
+        } else if self.crawled_resources.len() > 1000 { // XXX(konishchev): Configure the limits
+            self.crawled_resources.remove(&path);
+            self.on_error(format_args!("Failed to queue {url}: crawled resources limit has exceeded"));
+            return;
+        }
+
+        trace!("Queuing {url}");
+        let task = CrawlTask::new(url, delay, resource);
+
+        if delay.is_none() {
+            self.queue.push_front(task);
+        } else {
+            self.queue.push_back(task);
+        }
     }
 
     async fn process(&mut self, task: &CrawlTask) -> GenericResult<u64> {
         let url = &task.url;
-        if !util::validate_url_base(&self.base, url) {
-            return Err!("an attempt to crawl outside of the base url: {url}");
+        if util::validate_url_base(&self.base, url).is_none() {
+            return Err!("an attempt to crawl outside of the base URL: {url}");
         }
 
         let cost = task.delay.map(|_| 1).unwrap_or_default();
@@ -208,6 +239,8 @@ impl Crawler {
         Ok(limited_client.client.clone())
     }
 
+    // Should be used only for remote domain related errors (invalid responses, connection errors) – not for logical
+    // errors in crawler itself.
     fn on_error(&mut self, message: fmt::Arguments) {
         self.metrics.errors.inc();
         warn!("{message}.");

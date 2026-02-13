@@ -40,7 +40,7 @@ impl Resource for Sitemap {
 
     async fn process(&self, crawler: &mut Crawler, response: Response) -> GenericResult<u64> {
         let sitemap_url = response.url().clone();
-        if !util::validate_url_base(&self.url, &sitemap_url) {
+        if util::validate_url_base(&self.url, &sitemap_url).is_none() {
             return Err!("got an unexpected sitemap redirect: {} -> {}", self.url, sitemap_url);
         }
 
@@ -52,7 +52,7 @@ impl Resource for Sitemap {
                 inner_sitemaps.shuffle(&mut rand::rng());
 
                 for inner_sitemap in inner_sitemaps {
-                    if util::validate_url_base(&sitemap_url, &inner_sitemap.location) {
+                    if util::validate_url_base(&sitemap_url, &inner_sitemap.location).is_some() {
                         crawler.add(inner_sitemap.location.clone(), None, Sitemap::new(inner_sitemap.location));
                     } else {
                         crawler.on_error(format_args!(
@@ -67,7 +67,7 @@ impl Resource for Sitemap {
                 entries.shuffle(&mut rand::rng());
 
                 for entry in entries {
-                    if util::validate_url_base(&sitemap_url, &entry.location) {
+                    if util::validate_url_base(&sitemap_url, &entry.location).is_some() {
                         crawler.add(entry.location, Some(Delay::Page), Page::new());
                     } else {
                         crawler.on_error(format_args!("Sitemap {sitemap_url} refers an invalid URL {}", entry.location));
@@ -132,11 +132,7 @@ impl Resource for Page {
                 },
             };
 
-            // FIXME(konishchev): Deduplicate + add right after
-            #[allow(dead_code)]
-            if false {
-                crawler.add(url, resource_type.delay(), UnknownResource::new());
-            }
+            crawler.add(url, resource_type.delay(), UnknownResource::new());
         }
 
         Ok(data.len() as u64)
@@ -260,7 +256,7 @@ impl ResourceTypeCache {
     }
 
     fn key(&self, url: &Url) -> GenericResult<String> {
-        Ok(self.base.make_relative(url).ok_or_else(|| format!(
+        Ok(util::validate_url_base(&self.base, url).ok_or_else(|| format!(
             "invalid resource URL for the current base ({})", self.base))?)
     }
 }

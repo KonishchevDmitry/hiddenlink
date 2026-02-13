@@ -75,7 +75,7 @@ fn parse_resource_link(base: &Url, link: &str, filter: Option<&Url>) -> Option<U
     let mut url = Url::options().base_url(Some(base)).parse(link).ok()?;
 
     if let Some(filter) = filter {
-        if !util::validate_url_base(filter, &url) {
+        if util::validate_url_base(filter, &url).is_none() {
             return None;
         }
     }
