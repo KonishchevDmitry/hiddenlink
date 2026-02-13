@@ -18,7 +18,7 @@ pub enum ResourceSource {
     Other,
 }
 
-pub fn find_resources(page_url: &Url, data: &[u8], filter: &Url) -> impl Iterator<Item=(Url, ResourceSource)> {
+pub fn find_resources(page_url: &Url, data: &[u8], filter: &Url) -> impl Iterator<Item=(Url, ResourceSource)> + use<> {
     // Html::parse_document() can't parse bytes - only strings are supported, so parse it manually
     let parser = html5ever::parse_document(HtmlTreeSink::new(Html::new_document()), Default::default());
     let document = parser.from_utf8().one(data);

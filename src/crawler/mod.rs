@@ -31,7 +31,7 @@ use validator::Validate;
 use crate::core::GenericResult;
 
 pub use self::metrics::CrawlerMetrics;
-use self::resources::{Resource, Sitemap};
+use self::resources::{Resource, ResourceTypeCache, Sitemap};
 
 #[derive(Clone, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
@@ -58,6 +58,8 @@ pub struct Crawler {
     config: CrawlerConfig,
 
     queue: VecDeque<CrawlTask>,
+    resource_type_cache: ResourceTypeCache,
+
     client: Option<LimitedClient>,
     pub metrics: Arc<CrawlerMetrics>
 }
@@ -74,11 +76,13 @@ impl Crawler {
             "Invalid sitemap path: {:?}", config.sitemap_path))?;
 
         Ok(Crawler {
-            base,
+            base: base.clone(),
             sitemap,
             config: config.clone(),
 
             queue: VecDeque::new(),
+            resource_type_cache: ResourceTypeCache::new(&base),
+
             client: None,
             metrics: Arc::new(CrawlerMetrics::new()),
         })
@@ -133,7 +137,6 @@ impl Crawler {
         }
     }
 
-    // FIXME(konishchev): Validate urls
     // FIXME(konishchev): Deduplicate (redirects?) + limit?
     fn add<R: Resource + 'static>(&mut self, url: Url, delay: Option<Delay>, resource: R) {
         self.queue.push_back(CrawlTask::new(url, delay, resource));
