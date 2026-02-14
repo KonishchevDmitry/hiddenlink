@@ -9,7 +9,7 @@ use rand::seq::SliceRandom;
 use reqwest::{header, Response};
 use url::Url;
 
-use crate::core::{EmptyResult, GenericResult};
+use crate::core::GenericResult;
 
 use super::{Crawler, Delay};
 use super::html::{self, ResourceSource};
@@ -27,6 +27,8 @@ pub struct Sitemap {
 }
 
 impl Sitemap {
+    const SIZE_LIMIT: u64 = sitemap::SIZE_LIMIT;
+
     pub fn new(url: Url) -> Sitemap {
         Sitemap { url }
     }
@@ -44,7 +46,7 @@ impl Resource for Sitemap {
             return Err!("got an unexpected sitemap redirect: {} -> {}", self.url, sitemap_url);
         }
 
-        let data = read_response(self.name(), response, sitemap::SIZE_LIMIT).await?;
+        let data = read_response(self.name(), response, Self::SIZE_LIMIT).await?;
 
         match sitemap::parse(&data)? {
             sitemap::Sitemap::Index(index) => {
@@ -84,6 +86,8 @@ struct Page {
 }
 
 impl Page {
+    const SIZE_LIMIT: u64 = html::SIZE_LIMIT;
+
     fn new() -> Page {
         Page {}
     }
@@ -95,7 +99,6 @@ impl Resource for Page {
         "page"
     }
 
-    // XXX(konishchev): Update resource type cache?
     async fn process(&self, crawler: &mut Crawler, response: Response) -> GenericResult<u64> {
         match get_content_type(&response) {
             Ok(content_type) if content_type.type_() == mime::TEXT && content_type.subtype() == mime::HTML => {},
@@ -112,23 +115,18 @@ impl Resource for Page {
         }
 
         let page_url = response.url().clone();
-        let data = read_response(self.name(), response, html::SIZE_LIMIT).await?;
+        let data = read_response(self.name(), response, Self::SIZE_LIMIT).await?;
 
         for (url, source) in html::find_resources(&page_url, &data, &crawler.base) {
             let resource_type = match crawler.resource_type_cache.get(&url) {
-                Ok(Some(resource_type)) => {
+                Some(resource_type) => {
                     trace!("{url} is known as {resource_type}.");
                     resource_type
                 },
-                Ok(None) => {
+                None => {
                     let resource_type = ResourceType::guess_from_source(source);
                     trace!("Guessing {url} as {resource_type}.");
                     resource_type
-                },
-                Err(err) => {
-                    // XXX(konishchev): Don't skip
-                    crawler.on_error(format_args!("Failed to process {url}: {err}"));
-                    continue;
                 },
             };
 
@@ -143,6 +141,8 @@ struct Asset {
 }
 
 impl Asset {
+    const SIZE_LIMIT: u64 = 1024 * 1024;
+
     fn new() -> Asset {
         Asset {}
     }
@@ -154,12 +154,18 @@ impl Resource for Asset {
         "asset"
     }
 
-    async fn process(&self, _crawler: &mut Crawler, mut response: Response) -> GenericResult<u64> {
+    async fn process(&self, crawler: &mut Crawler, mut response: Response) -> GenericResult<u64> {
         let mut size = 0;
 
-        // XXX(konishchev): Size limit
         while let Some(chunk) = response.chunk().await? {
             size += chunk.len() as u64;
+
+            if size > Self::SIZE_LIMIT {
+                crawler.on_error(format_args!(
+                    "Failed to process {}: {} size limit is exceeded",
+                    response.url(), self.name()));
+                break;
+            }
         }
 
         Ok(size)
@@ -197,10 +203,7 @@ impl Resource for UnknownResource {
             },
         };
 
-        if let Err(err) = crawler.resource_type_cache.add(url, resource_type) {
-            error!("Failed to cache resource type of {url}: {err}.");
-        }
-
+        crawler.resource_type_cache.add(url, resource_type);
         resource.process(crawler, response).await
     }
 }
@@ -235,24 +238,38 @@ pub struct ResourceTypeCache {
 }
 
 impl ResourceTypeCache {
-    pub fn new(base: &Url) -> ResourceTypeCache {
+    pub fn new(base: &Url, max_capacity: usize, time_to_idle: Duration) -> ResourceTypeCache {
         ResourceTypeCache {
             base: base.to_owned(),
             cache: Cache::builder()
-                // FIXME(konishchev): Select values
-                .max_capacity(1000)
-                .time_to_idle(Duration::from_secs(60 * 60))
+                .max_capacity(max_capacity as u64)
+                .time_to_idle(time_to_idle)
                 .build(),
         }
     }
 
-    fn add(&mut self, url: &Url, resource_type: ResourceType) -> EmptyResult {
-        self.cache.insert(self.key(url)?, resource_type);
-        Ok(())
+    fn add(&mut self, url: &Url, resource_type: ResourceType) {
+        let key = match self.key(url) {
+            Ok(key) => key,
+            Err(err) => {
+                error!("Failed to cache resource type of {url}: {err}.");
+                return;
+            },
+        };
+
+        self.cache.insert(key, resource_type);
     }
 
-    fn get(&mut self, url: &Url) -> GenericResult<Option<ResourceType>> {
-        Ok(self.cache.get(&self.key(url)?))
+    fn get(&mut self, url: &Url) -> Option<ResourceType> {
+        let key = match self.key(url) {
+            Ok(key) => key,
+            Err(err) => {
+                error!("Failed to obtain a cached resource type of {url}: {err}.");
+                return None
+            },
+        };
+
+        self.cache.get(&key)
     }
 
     fn key(&self, url: &Url) -> GenericResult<String> {

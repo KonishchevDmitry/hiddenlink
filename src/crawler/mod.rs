@@ -66,6 +66,8 @@ pub struct Crawler {
 }
 
 impl Crawler {
+    const MAX_RESOURCES_PER_ITERATION: usize = 1000;
+
     pub fn new(config: &CrawlerConfig) -> GenericResult<Crawler> {
         let mut base = Url::parse("https://localhost/")?; // url crate has no URL builder
 
@@ -76,6 +78,18 @@ impl Crawler {
         let sitemap = base.join(&config.sitemap_path).map_err(|_| format!(
             "Invalid sitemap path: {:?}", config.sitemap_path))?;
 
+        let temporal_unavailability_duration = Duration::from_hours(1);
+        let max_crawling_iteration_duration = config.max_delay / 2 * Self::MAX_RESOURCES_PER_ITERATION as u32;
+        let max_next_crawling_iteration_duration = config.max_period + max_crawling_iteration_duration;
+
+        let lost_iterations_during_temporal_unavailability = (
+            temporal_unavailability_duration.as_secs_f64() / max_next_crawling_iteration_duration.as_secs_f64()
+        ).ceil() as u32;
+
+        let resource_type_cache_time_to_idle = max_crawling_iteration_duration
+            + max_next_crawling_iteration_duration * lost_iterations_during_temporal_unavailability
+            + max_next_crawling_iteration_duration;
+
         Ok(Crawler {
             base: base.clone(),
             sitemap,
@@ -83,7 +97,8 @@ impl Crawler {
 
             queue: VecDeque::new(),
             crawled_resources: HashSet::new(),
-            resource_type_cache: ResourceTypeCache::new(&base),
+            resource_type_cache: ResourceTypeCache::new(
+                &base, Self::MAX_RESOURCES_PER_ITERATION, resource_type_cache_time_to_idle),
 
             client: None,
             metrics: Arc::new(CrawlerMetrics::new()),
@@ -157,7 +172,7 @@ impl Crawler {
         if !self.crawled_resources.insert(path.clone()) {
             trace!("Skip queuing already crawled resource: {url}.");
             return;
-        } else if self.crawled_resources.len() > 1000 { // XXX(konishchev): Configure the limits
+        } else if self.crawled_resources.len() > Self::MAX_RESOURCES_PER_ITERATION {
             self.crawled_resources.remove(&path);
             self.on_error(format_args!("Failed to queue {url}: crawled resources limit has exceeded"));
             return;
