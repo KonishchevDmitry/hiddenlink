@@ -7,6 +7,7 @@ mod constants;
 mod controller;
 mod crawler;
 mod metrics;
+mod protocols;
 mod transport;
 mod tunnel;
 mod util;

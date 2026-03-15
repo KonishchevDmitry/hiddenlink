@@ -14,9 +14,10 @@ use tokio_rustls::LazyConfigAcceptor;
 use tokio_rustls::server::TlsStream;
 
 use crate::core::{GenericResult, ResultTools};
+use crate::protocols::proxy_protocol::ProxyProtocolHeader;
 use crate::transport::http::common::{self, ConnectionFlags, configure_socket_timeout, generate_random_payload,
     pre_configure_hiddenlink_socket, post_configure_hiddenlink_socket};
-use crate::transport::http::server::proxied_connection::{ProxiedConnection, ProxyProtocolHeader};
+use crate::transport::http::server::proxied_connection::ProxiedConnection;
 use crate::transport::http::tls::TlsDomains;
 
 pub struct ServerConnection {
