@@ -1,5 +1,6 @@
 mod hiddenlink_connection;
 mod proxied_connection;
+mod router;
 mod server_connection;
 
 use std::collections::HashMap;
