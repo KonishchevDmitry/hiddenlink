@@ -1,9 +1,52 @@
 use bytes::BytesMut;
+use serde::{Serialize, Deserialize};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio_rustls::server::TlsStream;
+use validator::Validate;
 
 use crate::core::GenericResult;
+use crate::protocols::hiddenlink;
+use crate::protocols::http::HttpUpstreamConfig;
+use crate::protocols::trojan::{self, TrojanConfig};
+
+#[derive(Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamsConfig {
+    http: HttpUpstreamConfig,
+    trojan: Option<TrojanConfig>,
+    hiddenlink: HiddenlinkConfig,
+}
+
+#[derive(Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct HiddenlinkConfig {
+    #[validate(non_control_character)]
+    #[validate(length(min = "hiddenlink::MIN_SECRET_LEN"))]
+    secret: String,
+}
+
+impl UpstreamsConfig {
+    pub fn as_routing_rules(&self) -> Vec<TunnelProtocolSpec> {
+        let mut routing_rules = vec![TunnelProtocolSpec {
+            protocol: TunnelProtocol::Hiddenlink,
+            header: hiddenlink::encode_secret_for_http1(&self.hiddenlink.secret),
+            extra_capacity: Some(hiddenlink::STATIC_HEADER_SIZE),
+        }];
+
+        if let Some(trojan) = self.trojan.as_ref() {
+            routing_rules.extend(trojan.passwords.iter().map(|password| {
+                TunnelProtocolSpec {
+                    protocol: TunnelProtocol::Trojan,
+                    header: trojan::get_header(password).into_bytes(),
+                    extra_capacity: None,
+                }
+            }));
+        }
+
+        routing_rules
+    }
+}
 
 #[derive(Clone, Copy)]
 pub enum TunnelProtocol {
@@ -12,9 +55,9 @@ pub enum TunnelProtocol {
 }
 
 pub struct TunnelProtocolSpec {
-    pub protocol: TunnelProtocol,
-    pub header: Vec<u8>,
-    pub extra_capacity: Option<usize>,
+    protocol: TunnelProtocol,
+    header: Vec<u8>,
+    extra_capacity: Option<usize>,
 }
 
 pub struct Router<'a> {
