@@ -11,19 +11,19 @@ pub enum TunnelProtocol {
     Trojan,
 }
 
-pub struct TunnelProtocolSpec<'a> {
+pub struct TunnelProtocolSpec {
     pub protocol: TunnelProtocol,
-    pub header: &'a [u8],
+    pub header: Vec<u8>,
     pub extra_capacity: Option<usize>,
 }
 
 pub struct Router<'a> {
     buf: BytesMut,
-    specs: Vec<TunnelProtocolSpec<'a>>,
+    specs: &'a Vec<TunnelProtocolSpec>,
 }
 
 impl<'a> Router<'a> {
-    fn new(specs: Vec<TunnelProtocolSpec<'a>>) -> Router<'a> {
+    pub fn new(specs: &'a Vec<TunnelProtocolSpec>) -> Router<'a> {
         let buf_size = specs.iter().map(|spec| {
             spec.header.len() + spec.extra_capacity.unwrap_or(0)
         }).max().unwrap_or(0);
@@ -34,7 +34,7 @@ impl<'a> Router<'a> {
         }
     }
 
-    async fn route(mut self, connection: &mut TlsStream<TcpStream>) -> GenericResult<(Option<TunnelProtocol>, BytesMut)> {
+    pub async fn route(mut self, connection: &mut TlsStream<TcpStream>) -> GenericResult<(Option<(TunnelProtocol, usize)>, BytesMut)> {
         loop {
             if connection.read_buf(&mut self.buf).await? == 0 {
                 return Ok((None, self.buf));
@@ -42,12 +42,13 @@ impl<'a> Router<'a> {
 
             let mut partial_match = false;
 
-            for spec in &self.specs {
-                let size = std::cmp::min(self.buf.len(), spec.header.len());
+            for spec in self.specs {
+                let header_size = spec.header.len();
+                let size = std::cmp::min(self.buf.len(), header_size);
 
                 if &self.buf[..size] == &spec.header[..size] {
-                    if size == spec.header.len() {
-                        return Ok((Some(spec.protocol), self.buf));
+                    if size == header_size {
+                        return Ok((Some((spec.protocol, header_size)), self.buf));
                     }
                     partial_match = true;
                 }

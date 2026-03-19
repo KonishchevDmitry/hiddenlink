@@ -22,10 +22,12 @@ use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::metrics::{self, TransportLabels};
+use crate::protocols::trojan;
 use crate::transport::{Transport, TransportDirection, MeteredTransport};
 use crate::transport::connections::TransportConnections;
 use crate::transport::http::common::{self, MIN_SECRET_LEN};
 use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
+use crate::transport::http::server::router::{TunnelProtocol, TunnelProtocolSpec};
 use crate::transport::http::server::server_connection::ServerConnection;
 use crate::transport::http::tls::{self, TlsDomains, TlsDomainConfig};
 use crate::transport::stat::TransportConnectionStat;
@@ -72,7 +74,7 @@ impl HttpServerTransport {
         let http1_secret = Arc::new(common::encode_secret_for_http1(&config.secret));
 
         let roots = tls::load_roots().map_err(|e| format!(
-            "Failed to load root certificates: {}", e))?;
+            "Failed to load root certificates: {e}"))?;
 
         let upstream_client_config = Arc::new(ClientConfig::builder()
             .with_root_certificates(roots)
@@ -87,7 +89,7 @@ impl HttpServerTransport {
         );
 
         let listener = TcpListener::bind(config.bind_address).await.map_err(|e| format!(
-            "Failed to bind to {}: {}", config.bind_address, e))?;
+            "Failed to bind to {}: {e}", config.bind_address))?;
 
         let transport = Arc::new(HttpServerTransport{
             name: name.to_owned(),
