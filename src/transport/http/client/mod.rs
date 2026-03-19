@@ -15,10 +15,11 @@ use validator::Validate;
 
 use crate::core::{GenericResult, GenericError, EmptyResult};
 use crate::metrics::{TransportLabels, self};
+use crate::protocols::hiddenlink;
 use crate::transport::{Transport, TransportDirection, MeteredTransport};
 use crate::transport::connections::TransportConnections;
 use crate::transport::http::client::connection::{Connection, ConnectionConfig};
-use crate::transport::http::common::{self, ConnectionFlags, MIN_SECRET_LEN};
+use crate::transport::http::common::ConnectionFlags;
 use crate::transport::http::tls;
 use crate::transport::stat::TransportConnectionStat;
 use crate::tunnel::Tunnel;
@@ -29,7 +30,7 @@ pub struct HttpClientTransportConfig {
     endpoint: String,
 
     #[validate(non_control_character)]
-    #[validate(length(min = "MIN_SECRET_LEN"))]
+    #[validate(length(min = "hiddenlink::MIN_SECRET_LEN"))]
     secret: String,
 
     #[serde(default="HttpClientTransportConfig::default_direction")]
@@ -75,7 +76,7 @@ impl HttpClientTransport {
         flags.set(ConnectionFlags::INGRESS, config.ingress);
         flags.set(ConnectionFlags::EGRESS, config.egress);
 
-        let secret = common::encode_secret_for_http1(&config.secret);
+        let secret = hiddenlink::encode_secret_for_http1(&config.secret);
 
         let min_ttl = config.connection_min_ttl.unwrap_or(Duration::from_secs(1));
         if min_ttl < Duration::from_secs(1) {

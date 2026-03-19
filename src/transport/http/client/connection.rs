@@ -17,8 +17,10 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
 
 use crate::core::{EmptyResult, GenericResult};
+use crate::protocols::hiddenlink;
+use crate::protocols::http;
 use crate::transport::{Transport, TransportDirection};
-use crate::transport::http::common::{self, ConnectionFlags, PacketReader, PacketWriter, generate_random_payload,
+use crate::transport::http::common::{ConnectionFlags, PacketReader, PacketWriter, generate_random_payload,
     pre_configure_hiddenlink_socket, post_configure_hiddenlink_socket};
 use crate::transport::stat::TransportConnectionStat;
 use crate::tunnel::Tunnel;
@@ -62,7 +64,7 @@ impl Connection {
 
             let current_connection_name = format!("{}|#{}", self.name, current_connection_id);
             let result = tokio::time::timeout(
-                common::CONNECTION_TIMEOUT, self.process_connect(&current_connection_name)
+                http::CONNECTION_TIMEOUT, self.process_connect(&current_connection_name)
             ).await.unwrap_or_else(|_| Err!("The connection has timed out"));
 
             match result {
@@ -158,18 +160,18 @@ impl Connection {
         request.put_u16(fake_http_request_size);
         request.put_slice(self.name.as_bytes());
         request.extend(fake_http_request);
-        request.put_slice(common::HEADER_SUFFIX);
+        request.put_slice(hiddenlink::HEADER_SUFFIX);
         connection.write_all(&request).await?;
 
         let mut fake_http_response_size: [u8; 2] = [0; 2];
         connection.read_exact(&mut fake_http_response_size).await?;
-        let response_size: usize = usize::from(u16::from_be_bytes(fake_http_response_size)) + common::HEADER_SUFFIX.len();
+        let response_size: usize = usize::from(u16::from_be_bytes(fake_http_response_size)) + hiddenlink::HEADER_SUFFIX.len();
 
         let mut response = BytesMut::with_capacity(response_size);
         unsafe { response.advance_mut(response_size); }
         connection.read_exact(&mut response).await?;
 
-        if !response.ends_with(common::HEADER_SUFFIX) {
+        if !response.ends_with(hiddenlink::HEADER_SUFFIX) {
             return Err!("Protocol violation error");
         }
 

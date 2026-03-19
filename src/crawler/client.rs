@@ -5,7 +5,7 @@ use reqwest::header::HeaderMap;
 use url::Url;
 
 use crate::core::GenericResult;
-use crate::transport::http;
+use crate::protocols::http;
 
 use super::util;
 

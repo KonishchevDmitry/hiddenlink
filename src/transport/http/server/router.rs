@@ -71,7 +71,7 @@ impl<'a> Router<'a> {
             spec.header.len() + spec.extra_capacity.unwrap_or(0)
         }).max().unwrap_or(0);
 
-        return Router {
+        Router {
             buf: BytesMut::with_capacity(buf_size),
             specs,
         }
@@ -89,7 +89,7 @@ impl<'a> Router<'a> {
                 let header_size = spec.header.len();
                 let size = std::cmp::min(self.buf.len(), header_size);
 
-                if &self.buf[..size] == &spec.header[..size] {
+                if self.buf[..size] == spec.header[..size] {
                     if size == header_size {
                         return Ok((Some((spec.protocol, header_size)), self.buf));
                     }

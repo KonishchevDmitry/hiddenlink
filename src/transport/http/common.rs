@@ -17,21 +17,11 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::oneshot::{Receiver, Sender};
 use tokio::task::JoinHandle;
-use urlencoding;
 
 use crate::{constants, util};
 use crate::core::{GenericResult, EmptyResult};
 use crate::transport::{Transport, TransportDirection};
 use crate::transport::stat::TransportConnectionStat;
-
-pub const MIN_SECRET_LEN: u64 = 10;
-pub const HEADER_SUFFIX: &[u8] = "hiddenlink!".as_bytes();
-pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60); // Standard nginx timeout
-
-// Available protocols:
-// https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml#alpn-protocol-ids
-pub const ALPN_HTTP1: &[u8] = "http/1.1".as_bytes();
-pub const ALPN_HTTP2: &[u8] = "h2".as_bytes();
 
 bitflags! {
     #[derive(Clone, Copy)]
@@ -361,13 +351,6 @@ pub fn configure_socket_timeout(connection: &TcpStream, timeout: Duration, keep_
     }
 
     Ok(())
-}
-
-// The result secret must be a prefix of a first line of a valid HTTP request – in other case, an attacker will be able
-// to brute-force the secret symbol-by-symbol if he knows how exactly the upstream server parses and validates HTTP
-// requests.
-pub fn encode_secret_for_http1(secret: &str) -> Vec<u8> {
-    format!("POST /hiddenlink/v1/connect?secret={}", urlencoding::encode(secret)).into_bytes()
 }
 
 pub fn generate_random_payload<R, I>(range: R) -> (impl Iterator<Item=u8>, I)

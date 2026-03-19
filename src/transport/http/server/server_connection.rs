@@ -18,7 +18,7 @@ use crate::protocols::hiddenlink;
 use crate::protocols::http;
 use crate::protocols::proxy::{ProxySpec, ProxyTlsSpec, ProxiedConnection};
 use crate::protocols::proxy_protocol::ProxyProtocolHeader;
-use crate::transport::http::common::{self, ConnectionFlags, configure_socket_timeout, generate_random_payload,
+use crate::transport::http::common::{ConnectionFlags, configure_socket_timeout, generate_random_payload,
     pre_configure_hiddenlink_socket, post_configure_hiddenlink_socket};
 use crate::transport::http::server::router::{Router, TunnelProtocol, TunnelProtocolSpec, UpstreamsConfig};
 use crate::transport::http::tls::TlsDomains;
@@ -116,7 +116,7 @@ impl ServerConnection {
             trace!("[{}] ALPN: {}.", self.name, client_hello.alpn().unwrap().map(String::from_utf8_lossy).join(", "));
 
             if let Some(protocol) = alpn.find(|&protocol| {
-                protocol == common::ALPN_HTTP2 || protocol == common::ALPN_HTTP1
+                protocol == http::ALPN_HTTP2 || protocol == http::ALPN_HTTP1
             }) {
                 let mut new_config = Arc::unwrap_or_clone(tls_config);
                 new_config.alpn_protocols.push(protocol.to_vec());
@@ -164,7 +164,7 @@ impl ServerConnection {
     ) -> GenericResult<RoutingDecision> {
         // At this time we don't support hiddenlink over HTTP/2, which is not good in terms of TLS fingerprint of our
         // hiddenlink connections, but we don't bother about this now.
-        if let Some(protocol) = negotiated_protocol.as_ref() && protocol.as_slice() != common::ALPN_HTTP1 {
+        if let Some(protocol) = negotiated_protocol.as_ref() && protocol.as_slice() != http::ALPN_HTTP1 {
             return self.route_to_http_upstream(Bytes::new(), connection, domain, negotiated_protocol);
         }
 
@@ -223,7 +223,7 @@ impl ServerConnection {
             connection,
             spec: ProxySpec {
                 address: self.upstreams.http.address,
-                proxy_protocol: self.upstreams.http.proxy_protocol.then(|| ProxyProtocolHeader {
+                proxy_protocol: self.upstreams.http.proxy_protocol.then_some(ProxyProtocolHeader {
                     peer_addr: self.peer_addr,
                     local_addr: self.local_addr,
                 }),
