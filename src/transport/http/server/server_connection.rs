@@ -14,10 +14,13 @@ use tokio_rustls::LazyConfigAcceptor;
 use tokio_rustls::server::TlsStream;
 
 use crate::core::{GenericResult, ResultTools};
+use crate::protocols::hiddenlink;
+use crate::protocols::http;
+use crate::protocols::proxy::{ProxySpec, ProxyTlsSpec, ProxiedConnection};
 use crate::protocols::proxy_protocol::ProxyProtocolHeader;
 use crate::transport::http::common::{self, ConnectionFlags, configure_socket_timeout, generate_random_payload,
     pre_configure_hiddenlink_socket, post_configure_hiddenlink_socket};
-use crate::transport::http::server::proxied_connection::ProxiedConnection;
+use crate::transport::http::server::router::{Router, TunnelProtocol, TunnelProtocolSpec, UpstreamsConfig};
 use crate::transport::http::tls::TlsDomains;
 
 pub struct ServerConnection {
@@ -27,17 +30,16 @@ pub struct ServerConnection {
     local_addr: SocketAddr,
 
     domains: Arc<TlsDomains>,
-    http1_secret: Arc<Vec<u8>>,
+    routing_rules: Arc<Vec<TunnelProtocolSpec>>,
 
-    upstream_addr: SocketAddr,
-    upstream_client_config: Arc<ClientConfig>,
-    proxy_protocol: bool,
+    upstreams: Arc<UpstreamsConfig>,
+    tls_client_config: Arc<ClientConfig>,
 }
 
 impl ServerConnection {
     pub fn new(
-        peer_addr: SocketAddr, local_addr: SocketAddr, http1_secret: Arc<Vec<u8>>, domains: Arc<TlsDomains>,
-        upstream_addr: SocketAddr, upstream_client_config: Arc<ClientConfig>, proxy_protocol: bool,
+        peer_addr: SocketAddr, local_addr: SocketAddr, domains: Arc<TlsDomains>, routing_rules: Arc<Vec<TunnelProtocolSpec>>,
+        upstreams: Arc<UpstreamsConfig>, tls_client_config: Arc<ClientConfig>,
     ) -> ServerConnection {
         ServerConnection {
             name: format!("HTTP connection from {}", peer_addr),
@@ -46,37 +48,32 @@ impl ServerConnection {
             local_addr,
 
             domains,
-            http1_secret,
+            routing_rules,
 
-            upstream_addr,
-            upstream_client_config,
-            proxy_protocol,
+            upstreams,
+            tls_client_config,
         }
     }
 
     pub async fn handle(self, tcp_connection: TcpStream) -> Option<HiddenlinkConnectionRequest> {
         let process_handshake = tokio::time::timeout(
-            common::CONNECTION_TIMEOUT,
+            http::CONNECTION_TIMEOUT,
             self.process_handshake(tcp_connection));
 
         let decision = process_handshake.await.ok_or_handle_error(|_err: Elapsed| {
             trace!("[{}] The connection has timed out.", self.name);
         })?;
 
-        let hiddenlink_connection_request = match decision? {
+        match decision? {
             RoutingDecision::Hiddenlink(request) => {
                 info!("[{}] The client has passed hiddenlink handshake as {:?}.", self.name, request.name);
-                request
+                Some(request)
             },
-            RoutingDecision::Proxy {connection, upstream_domain, negotiated_protocol, preread_data} => {
-                trace!("[{}] The client hasn't passed hiddenlink handshake. Proxying the request to {}...",
-                    self.name, self.upstream_addr);
-                self.proxy_request(connection, &upstream_domain, negotiated_protocol, preread_data).await;
-                return None;
+            RoutingDecision::Proxy {name, preread_data, connection, spec} => {
+                self.proxy_request(name, preread_data, connection, spec).await;
+                None
             },
-        };
-
-        Some(hiddenlink_connection_request)
+        }
     }
 
     async fn process_handshake(&self, tcp_connection: TcpStream) -> Option<RoutingDecision> {
@@ -163,50 +160,83 @@ impl ServerConnection {
     }
 
     async fn process_routing_decision(
-        &self, mut connection: TlsStream<TcpStream>, upstream_domain: &str, negotiated_protocol: Option<Vec<u8>>
+        &self, mut connection: TlsStream<TcpStream>, domain: &str, negotiated_protocol: Option<Vec<u8>>
     ) -> GenericResult<RoutingDecision> {
         // At this time we don't support hiddenlink over HTTP/2, which is not good in terms of TLS fingerprint of our
         // hiddenlink connections, but we don't bother about this now.
         if let Some(protocol) = negotiated_protocol.as_ref() && protocol.as_slice() != common::ALPN_HTTP1 {
-            return Ok(RoutingDecision::Proxy {
-                connection,
-                upstream_domain: upstream_domain.to_owned(),
-                negotiated_protocol,
-                preread_data: Bytes::new(),
-            })
+            return self.route_to_http_upstream(Bytes::new(), connection, domain, negotiated_protocol);
         }
 
-        let secret = self.http1_secret.as_slice();
-        let mut buf = BytesMut::with_capacity(secret.len() + Self::HIDDENLINK_STATIC_HEADER_SIZE);
+        let (protocol, preread_data) = Router::new(&self.routing_rules).route(&mut connection).await?;
 
-        loop {
-            let size = connection.read_buf(&mut buf).await?;
+        match protocol {
+            Some((TunnelProtocol::Hiddenlink, header_size)) => {
+                self.process_hiddenlink_handshake(connection, preread_data, header_size).await.map_err(|e| format!(
+                    "Hiddenlink handshake failed: {e}").into())
+            },
 
-            if buf.len() >= secret.len() {
-                if &buf[..secret.len()] != secret {
-                    break;
-                }
-                return self.process_hiddenlink_handshake(connection, buf, secret.len()).await.map_err(|e| format!(
-                    "Hiddenlink handshake failed: {e}").into());
-            } else if size == 0 || buf != secret[..buf.len()] {
-                break;
-            }
+            Some((TunnelProtocol::Trojan, _header_size)) => {
+                let config = self.upstreams.trojan.as_ref().ok_or(
+                    "Got an unexpected Trojan connection")?;
+
+                // FIXME(konishchev): Configure
+                configure_socket_timeout(connection.get_ref().0, http::CONNECTION_TIMEOUT, None)?;
+
+                Ok(RoutingDecision::Proxy {
+                    name: Some(format!("Trojan connection from {}", self.peer_addr)),
+                    preread_data: preread_data.freeze(),
+                    connection,
+                    spec: ProxySpec {
+                        address: config.address,
+                        proxy_protocol: None, // Sadly, but sing-box doesn't support proxy protocol
+                        // FIXME(konishchev): Drop it when proxy will support it
+                        tls: Some(ProxyTlsSpec {
+                            domain: domain.to_owned(),
+                            client_config: self.tls_client_config.clone(),
+                        }),
+                    },
+                })
+            },
+
+            None => self.route_to_http_upstream(preread_data.freeze(), connection, domain, negotiated_protocol),
+        }
+    }
+
+    fn route_to_http_upstream(
+        &self, preread_data: Bytes, connection: TlsStream<TcpStream>, domain: &str, negotiated_protocol: Option<Vec<u8>>,
+    ) -> GenericResult<RoutingDecision> {
+        let mut tls_client_config = self.tls_client_config.clone();
+        if let Some(protocol) = negotiated_protocol {
+            tls_client_config = Arc::new({
+                let mut new_config = Arc::unwrap_or_clone(tls_client_config);
+                new_config.alpn_protocols.push(protocol);
+                new_config
+            });
         }
 
-        configure_socket_timeout(connection.get_ref().0, common::CONNECTION_TIMEOUT, None)?;
+        configure_socket_timeout(connection.get_ref().0, http::CONNECTION_TIMEOUT, None)?;
 
         Ok(RoutingDecision::Proxy {
+            name: None,
+            preread_data,
             connection,
-            upstream_domain: upstream_domain.to_owned(),
-            negotiated_protocol,
-            preread_data: buf.freeze(),
+            spec: ProxySpec {
+                address: self.upstreams.http.address,
+                proxy_protocol: self.upstreams.http.proxy_protocol.then(|| ProxyProtocolHeader {
+                    peer_addr: self.peer_addr,
+                    local_addr: self.local_addr,
+                }),
+                tls: Some(ProxyTlsSpec {
+                    domain: domain.to_owned(),
+                    client_config: tls_client_config,
+                }),
+            },
         })
     }
 
-    const HIDDENLINK_STATIC_HEADER_SIZE: usize = 1 + 1 + 2; // flags + name length + HTTP request size
-
     async fn process_hiddenlink_handshake(&self, mut connection: TlsStream<TcpStream>, mut buf: BytesMut, mut index: usize) -> GenericResult<RoutingDecision> {
-        while buf.len() < index + Self::HIDDENLINK_STATIC_HEADER_SIZE {
+        while buf.len() < index + hiddenlink::STATIC_HEADER_SIZE {
             if connection.read_buf(&mut buf).await? == 0 {
                 return Err!("Got an unexpected EOF");
             }
@@ -221,7 +251,7 @@ impl ServerConnection {
         let fake_http_request_size: usize = u16::from_be_bytes(buf[index..index + 2].try_into().unwrap()).into();
         index += 2;
 
-        let handshake_size = index + name_len + fake_http_request_size + common::HEADER_SUFFIX.len();
+        let handshake_size = index + name_len + fake_http_request_size + hiddenlink::HEADER_SUFFIX.len();
 
         while buf.len() < handshake_size {
             buf.reserve(handshake_size - buf.len());
@@ -235,10 +265,10 @@ impl ServerConnection {
         index += name_len;
         index += fake_http_request_size;
 
-        if &buf[index..index + common::HEADER_SUFFIX.len()] != common::HEADER_SUFFIX {
+        if &buf[index..index + hiddenlink::HEADER_SUFFIX.len()] != hiddenlink::HEADER_SUFFIX {
             return Err!("Protocol violation error");
         }
-        index += common::HEADER_SUFFIX.len();
+        index += hiddenlink::HEADER_SUFFIX.len();
 
         let flags = ConnectionFlags::from_bits(raw_flags).ok_or_else(|| format!(
             "Invalid connection flags: {raw_flags:08b}"))?;
@@ -261,7 +291,7 @@ impl ServerConnection {
         let mut response = BytesMut::new();
         response.put_u16(fake_http_response_size);
         response.extend(fake_http_response);
-        response.put_slice(common::HEADER_SUFFIX);
+        response.put_slice(hiddenlink::HEADER_SUFFIX);
         connection.write_all(&response).await?;
 
         let tcp_connection = connection.get_ref().0;
@@ -278,30 +308,24 @@ impl ServerConnection {
     }
 
     async fn proxy_request<C: AsyncRead + AsyncWrite>(
-        &self, connection: C, upstream_domain: &str, negotiated_protocol: Option<Vec<u8>>, preread_data: Bytes,
+        &self, name: Option<String>, preread_data: Bytes, connection: C, spec: ProxySpec,
     ) {
-        let mut tls_config = self.upstream_client_config.clone();
-        if let Some(protocol) = negotiated_protocol {
-            let mut new_config = Arc::unwrap_or_clone(tls_config);
-            new_config.alpn_protocols.push(protocol);
-            tls_config = Arc::new(new_config);
-        }
+        let address = spec.address;
 
-        let proxy_protocol = self.proxy_protocol.then_some(ProxyProtocolHeader {
-            peer_addr: self.peer_addr,
-            local_addr: self.local_addr,
-        });
+        let name = if let Some(name) = name.as_ref() {
+            info!("[{}] The client is now known as {name:?}. Proxying the request to {address}...", self.name);
+            name
+        } else {
+            trace!("[{}] Proxying the request to {address}...", self.name);
+            &self.name
+        };
 
-        match ProxiedConnection::new(
-            &self.name, connection, preread_data, false,
-            tls_config, self.upstream_addr, upstream_domain, proxy_protocol,
-        ).await {
+        match ProxiedConnection::new(name, preread_data, connection, spec).await {
             Ok(proxied_connection) => {
                 proxied_connection.handle().await;
             },
             Err(err) => {
-                warn!("[{}] Failed to proxy client connection to upstream server {}: {}.",
-                    self.name, self.upstream_addr, err);
+                warn!("[{name}] Failed to proxy client connection to upstream server {address}: {err}.");
             },
         };
     }
@@ -310,10 +334,10 @@ impl ServerConnection {
 enum RoutingDecision {
     Hiddenlink(HiddenlinkConnectionRequest),
     Proxy {
-        connection: TlsStream<TcpStream>,
-        upstream_domain: String,
-        negotiated_protocol: Option<Vec<u8>>,
+        name: Option<String>,
         preread_data: Bytes,
+        connection: TlsStream<TcpStream>,
+        spec: ProxySpec,
     },
 }
 

@@ -10,15 +10,15 @@ use crate::protocols::hiddenlink;
 use crate::protocols::http::HttpUpstreamConfig;
 use crate::protocols::trojan::{self, TrojanConfig};
 
-#[derive(Serialize, Deserialize, Validate)]
+#[derive(Clone, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct UpstreamsConfig {
-    http: HttpUpstreamConfig,
-    trojan: Option<TrojanConfig>,
-    hiddenlink: HiddenlinkConfig,
+    pub http: HttpUpstreamConfig,
+    pub trojan: Option<TrojanConfig>,
+    pub hiddenlink: HiddenlinkConfig,
 }
 
-#[derive(Serialize, Deserialize, Validate)]
+#[derive(Clone, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct HiddenlinkConfig {
     #[validate(non_control_character)]

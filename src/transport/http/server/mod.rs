@@ -1,5 +1,4 @@
 mod hiddenlink_connection;
-mod proxied_connection;
 mod router;
 mod server_connection;
 
@@ -22,12 +21,10 @@ use validator::Validate;
 
 use crate::core::{GenericResult, EmptyResult};
 use crate::metrics::{self, TransportLabels};
-use crate::protocols::trojan;
 use crate::transport::{Transport, TransportDirection, MeteredTransport};
 use crate::transport::connections::TransportConnections;
-use crate::transport::http::common::{self, MIN_SECRET_LEN};
 use crate::transport::http::server::hiddenlink_connection::HiddenlinkConnection;
-use crate::transport::http::server::router::{TunnelProtocol, TunnelProtocolSpec};
+use crate::transport::http::server::router::{TunnelProtocolSpec, UpstreamsConfig};
 use crate::transport::http::server::server_connection::ServerConnection;
 use crate::transport::http::tls::{self, TlsDomains, TlsDomainConfig};
 use crate::transport::stat::TransportConnectionStat;
@@ -37,17 +34,12 @@ use crate::tunnel::Tunnel;
 #[serde(deny_unknown_fields)]
 pub struct HttpServerTransportConfig {
     bind_address: SocketAddr,
-    upstream_address: SocketAddr,
-    #[serde(default)]
-    proxy_protocol: bool,
 
     default_domain: TlsDomainConfig,
     #[serde(default)]
     additional_domains: Vec<TlsDomainConfig>,
 
-    #[validate(non_control_character)]
-    #[validate(length(min = "MIN_SECRET_LEN"))]
-    secret: String,
+    upstreams: UpstreamsConfig,
 }
 
 pub struct HttpServerTransport {
@@ -55,11 +47,10 @@ pub struct HttpServerTransport {
     labels: TransportLabels,
 
     domains: Arc<TlsDomains>,
-    http1_secret: Arc<Vec<u8>>,
+    routing_rules: Arc<Vec<TunnelProtocolSpec>>,
 
-    upstream_address: SocketAddr,
-    upstream_client_config: Arc<ClientConfig>,
-    proxy_protocol: bool,
+    upstreams: Arc<UpstreamsConfig>,
+    tls_client_config: Arc<ClientConfig>,
 
     proxied_connections_count: Arc<Gauge>,
     proxied_connections_semaphore: Arc<Semaphore>,
@@ -71,12 +62,11 @@ impl HttpServerTransport {
     pub async fn new(name: &str, config: &HttpServerTransportConfig, tunnel: Arc<Tunnel>) -> GenericResult<Arc<dyn MeteredTransport>> {
         let labels = metrics::transport_labels(name);
         let domains = Arc::new(TlsDomains::new(&config.default_domain, &config.additional_domains)?);
-        let http1_secret = Arc::new(common::encode_secret_for_http1(&config.secret));
 
         let roots = tls::load_roots().map_err(|e| format!(
             "Failed to load root certificates: {e}"))?;
 
-        let upstream_client_config = Arc::new(ClientConfig::builder()
+        let tls_client_config = Arc::new(ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth());
 
@@ -96,11 +86,10 @@ impl HttpServerTransport {
             labels,
 
             domains,
-            http1_secret,
+            routing_rules: Arc::new(config.upstreams.as_routing_rules()),
 
-            upstream_address: config.upstream_address,
-            upstream_client_config,
-            proxy_protocol: config.proxy_protocol,
+            upstreams: Arc::new(config.upstreams.clone()),
+            tls_client_config,
 
             proxied_connections_count: Arc::new(Gauge::default()),
             proxied_connections_semaphore: Arc::new(Semaphore::new(max_proxied_connections)),
@@ -150,8 +139,8 @@ impl HttpServerTransport {
             let proxied_connections = self.proxied_connections_count.clone();
 
             let server_connection = ServerConnection::new(
-                peer_addr, local_addr, self.http1_secret.clone(), self.domains.clone(),
-                self.upstream_address, self.upstream_client_config.clone(), self.proxy_protocol);
+                peer_addr, local_addr, self.domains.clone(), self.routing_rules.clone(), self.upstreams.clone(),
+                self.tls_client_config.clone());
 
             proxied_connections.inc();
             tokio::spawn(async move {

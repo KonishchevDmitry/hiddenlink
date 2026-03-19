@@ -6,7 +6,7 @@ use serde::{Serialize, Deserialize};
 use sha2::{Sha224, Digest};
 use validator::Validate;
 
-#[derive(Serialize, Deserialize, Validate)]
+#[derive(Clone, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct TrojanConfig {
     pub address: SocketAddr,

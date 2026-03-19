@@ -6,7 +6,7 @@ use validator::Validate;
 
 pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60); // Standard nginx timeout
 
-#[derive(Serialize, Deserialize, Validate)]
+#[derive(Clone, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct HttpUpstreamConfig {
     pub address: SocketAddr,
