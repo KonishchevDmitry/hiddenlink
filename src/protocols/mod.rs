@@ -1,2 +1,4 @@
+pub mod http;
+pub mod proxy;
 pub mod proxy_protocol;
 pub mod trojan;
