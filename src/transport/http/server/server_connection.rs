@@ -1,6 +1,7 @@
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use itertools::Itertools;
@@ -18,8 +19,9 @@ use crate::protocols::hiddenlink;
 use crate::protocols::http;
 use crate::protocols::proxy::{ProxySpec, ProxyTlsSpec, ProxiedConnection};
 use crate::protocols::proxy_protocol::ProxyProtocolHeader;
-use crate::transport::http::common::{ConnectionFlags, configure_socket_timeout, generate_random_payload,
-    pre_configure_hiddenlink_socket, post_configure_hiddenlink_socket};
+use crate::protocols::tcp;
+use crate::transport::http::common::{ConnectionFlags, generate_random_payload, pre_configure_hiddenlink_socket,
+    post_configure_hiddenlink_socket};
 use crate::transport::http::server::router::{Router, TunnelProtocol, TunnelProtocolSpec, UpstreamsConfig};
 use crate::transport::http::tls::TlsDomains;
 
@@ -177,30 +179,38 @@ impl ServerConnection {
             },
 
             Some((TunnelProtocol::Trojan, _header_size)) => {
-                let config = self.upstreams.trojan.as_ref().ok_or(
-                    "Got an unexpected Trojan connection")?;
-
-                // FIXME(konishchev): Configure
-                configure_socket_timeout(connection.get_ref().0, http::CONNECTION_TIMEOUT, None)?;
-
-                Ok(RoutingDecision::Proxy {
-                    name: Some(format!("Trojan connection from {}", self.peer_addr)),
-                    preread_data: preread_data.freeze(),
-                    connection,
-                    spec: ProxySpec {
-                        address: config.address,
-                        proxy_protocol: None, // Sadly, but sing-box doesn't support proxy protocol
-                        // FIXME(konishchev): Drop it when proxy will support it
-                        tls: Some(ProxyTlsSpec {
-                            domain: domain.to_owned(),
-                            client_config: self.tls_client_config.clone(),
-                        }),
-                    },
-                })
-            },
+                self.route_to_trojan_upstream(preread_data.freeze(), connection, domain)
+            }
 
             None => self.route_to_http_upstream(preread_data.freeze(), connection, domain, negotiated_protocol),
         }
+    }
+
+    fn route_to_trojan_upstream(
+        &self, preread_data: Bytes, connection: TlsStream<TcpStream>, domain: &str,
+    ) -> GenericResult<RoutingDecision> {
+        let config = self.upstreams.trojan.as_ref().ok_or(
+            "Got an unexpected Trojan connection")?;
+
+        let tcp_connection = connection.get_ref().0;
+        // FIXME(konishchev): Configure and move to proxy
+        tcp::configure_socket_timeout(tcp_connection, Duration::from_secs(20), None)?;
+        tcp::configure_congestion_control(tcp_connection)?;
+
+        Ok(RoutingDecision::Proxy {
+            name: Some(format!("Trojan connection from {}", self.peer_addr)),
+            preread_data,
+            connection,
+            spec: ProxySpec {
+                address: config.address,
+                proxy_protocol: None, // Sadly, but sing-box doesn't support proxy protocol
+                // FIXME(konishchev): Drop it when proxy will support it
+                tls: Some(ProxyTlsSpec {
+                    domain: domain.to_owned(),
+                    client_config: self.tls_client_config.clone(),
+                }),
+            },
+        })
     }
 
     fn route_to_http_upstream(
@@ -215,7 +225,7 @@ impl ServerConnection {
             });
         }
 
-        configure_socket_timeout(connection.get_ref().0, http::CONNECTION_TIMEOUT, None)?;
+        tcp::configure_socket_timeout(connection.get_ref().0, http::CONNECTION_TIMEOUT, None)?;
 
         Ok(RoutingDecision::Proxy {
             name: None,

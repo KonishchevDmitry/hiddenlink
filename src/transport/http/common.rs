@@ -1,5 +1,4 @@
 use std::marker::Unpin;
-use std::io::ErrorKind;
 use std::os::fd::{RawFd, BorrowedFd};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -11,7 +10,7 @@ use log::{trace, error};
 use num::ToPrimitive;
 use prometheus_client::encoding::DescriptorEncoder;
 use rand::{Rng, distr::{Alphanumeric, Distribution, uniform::{SampleRange, SampleUniform}}};
-use socket2::{SockRef, TcpKeepalive};
+use socket2::TcpKeepalive;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex as AsyncMutex;
@@ -20,6 +19,7 @@ use tokio::task::JoinHandle;
 
 use crate::{constants, util};
 use crate::core::{GenericResult, EmptyResult};
+use crate::protocols::tcp;
 use crate::transport::{Transport, TransportDirection};
 use crate::transport::stat::TransportConnectionStat;
 
@@ -311,7 +311,7 @@ impl<C: AsyncWriteExt + Unpin> PacketWriterConnectionHandle<C> {
 }
 
 pub fn pre_configure_hiddenlink_socket(connection: &TcpStream) -> EmptyResult {
-    configure_socket_timeout(connection, Duration::from_secs(10), Some(
+    tcp::configure_socket_timeout(connection, Duration::from_secs(10), Some(
         TcpKeepalive::new()
             .with_time(Duration::from_secs(5))
             .with_interval(Duration::from_secs(1))
@@ -320,35 +320,13 @@ pub fn pre_configure_hiddenlink_socket(connection: &TcpStream) -> EmptyResult {
 }
 
 pub fn post_configure_hiddenlink_socket(connection: &TcpStream) -> EmptyResult {
-    let socket = SockRef::from(connection);
-
-    // BBR should be better for transcontinental connections with periodic packet drops
-    if let Err(err) = socket.set_tcp_congestion("bbr".as_bytes()) {
-        if err.kind() != ErrorKind::NotFound {
-            return Err!("Failed to set TCP_CONGESTION socket option: {err}");
-        }
-        error!("Failed to enable BBR TCP congestion control algorithm for hiddenlink connection: tcp_bbr module is not loaded.");
-    }
+    tcp::configure_congestion_control(connection)?;
 
     // When hiddenlink handshake is completed, all subsequent writes to the socket will contain actual packets, so
     // disable Nagle algorithm to not delay them. But please note that small packets can actually reveal our tunnel
     // when we use simplex HTTPS masking.
     connection.set_nodelay(true).map_err(|e| format!(
         "Failed to set TCP_NODELAY socket option: {e}"))?;
-
-    Ok(())
-}
-
-pub fn configure_socket_timeout(connection: &TcpStream, timeout: Duration, keep_alive: Option<TcpKeepalive>) -> EmptyResult {
-    let socket = SockRef::from(connection);
-
-    socket.set_tcp_user_timeout(Some(timeout)).map_err(|e| format!(
-        "Failed to set TCP_USER_TIMEOUT socket option: {e}"))?;
-
-    if let Some(keep_alive) = keep_alive {
-        socket.set_tcp_keepalive(&keep_alive).map_err(|e| format!(
-            "Failed to configure TCP keepalive: {e}"))?;
-    }
 
     Ok(())
 }
