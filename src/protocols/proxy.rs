@@ -33,19 +33,13 @@ pub struct ProxiedConnection<'a, C: AsyncRead + AsyncWrite> {
     name: &'a str,
     preread_data: Bytes,
     client_connection: C,
-    upstream_connection: ClientTlsStream<TcpStream>,
+    upstream_connection: Box<dyn UpstreamConnection>,
 }
 
 impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
     pub async fn new(
         name: &'a str, preread_data: Bytes, client_connection: C, spec: ProxySpec,
     ) -> GenericResult<ProxiedConnection<'a, C>> {
-        // FIXME(konishchev): Support it
-        let tls_spec = spec.tls.ok_or("non-TLS proxied connections is not supported yet")?;
-
-        let domain = DnsName::try_from(tls_spec.domain.as_str()).map_err(|_| format!(
-            "Invalid DNS name: {:?}", tls_spec.domain))?.to_owned();
-
         let mut upstream_tcp_connection = TcpStream::connect(spec.address).await.map_err(|e| format!(
             "Unable to connect: {e}"))?;
 
@@ -54,16 +48,26 @@ impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
                 "Unable to send proxy protocol header: {e}"))?;
         }
 
-        let domain = ServerName::DnsName(domain);
-        let upstream_tls_connection = TlsConnector::from(tls_spec.client_config)
-            .connect(domain, upstream_tcp_connection).await
-            .map_err(|e| format!("TLS handshake failed: {e}"))?;
+        let upstream_connection: Box<dyn UpstreamConnection> = match spec.tls {
+            Some(tls) => {
+                let domain = DnsName::try_from(tls.domain.as_str()).map_err(|_| format!(
+                    "Invalid DNS name: {:?}", tls.domain))?.to_owned();
+
+                let domain = ServerName::DnsName(domain);
+                let upstream_tls_connection = TlsConnector::from(tls.client_config)
+                    .connect(domain, upstream_tcp_connection).await
+                    .map_err(|e| format!("TLS handshake failed: {e}"))?;
+
+                Box::new(upstream_tls_connection)
+            },
+            None => Box::new(upstream_tcp_connection),
+        };
 
         Ok(ProxiedConnection {
             name,
             preread_data,
             client_connection,
-            upstream_connection: upstream_tls_connection,
+            upstream_connection,
         })
     }
 
@@ -75,7 +79,7 @@ impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
 
         let preread_data = self.preread_data;
         let (client_reader, client_writer) = tokio::io::split(self.client_connection);
-        let (upstream_reader, upstream_writer) = tokio::io::split(self.upstream_connection);
+        let (upstream_reader, upstream_writer) = tokio::io::split(Box::into_pin(self.upstream_connection));
 
         let client_shutdown = Notify::new();
 
@@ -107,11 +111,17 @@ impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
                 trace!("[{}] The connection has been successfully proxied.", self.name);
             },
             Err(err) => {
-                trace!("[{}] {}.", self.name, err);
+                trace!("[{}] {err}.", self.name);
             },
         }
     }
 }
+
+trait UpstreamConnection: AsyncRead + AsyncWrite + Send + Unpin {
+}
+
+impl UpstreamConnection for TcpStream {}
+impl UpstreamConnection for ClientTlsStream<TcpStream> {}
 
 async fn proxy_connection<R, W>(preread_data: Option<Bytes>, reader: R, writer: W) -> EmptyResult
     where R: AsyncRead, W: AsyncWrite
