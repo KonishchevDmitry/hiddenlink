@@ -8,6 +8,7 @@ use itertools::Itertools;
 use log::{trace, info, warn, error};
 use rustls::ClientConfig;
 use rustls::server::Acceptor;
+use socket2::TcpKeepalive;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::error::Elapsed;
@@ -179,22 +180,26 @@ impl ServerConnection {
             },
 
             Some((TunnelProtocol::Trojan, _header_size)) => {
-                self.route_to_trojan_upstream(preread_data.freeze(), connection, domain)
-            }
+                self.route_to_trojan_upstream(preread_data.freeze(), connection)
+            },
 
             None => self.route_to_http_upstream(preread_data.freeze(), connection, domain, negotiated_protocol),
         }
     }
 
-    fn route_to_trojan_upstream(
-        &self, preread_data: Bytes, connection: TlsStream<TcpStream>, domain: &str,
-    ) -> GenericResult<RoutingDecision> {
+    fn route_to_trojan_upstream(&self, preread_data: Bytes, connection: TlsStream<TcpStream>) -> GenericResult<RoutingDecision> {
         let config = self.upstreams.trojan.as_ref().ok_or(
             "Got an unexpected Trojan connection")?;
 
+        // The clients are already authenticated and trusted, but they are mobile clients and can suddenly lost the
+        // connection or switch the provider, so we have a high probability of dead and half-dead connections here.
         let tcp_connection = connection.get_ref().0;
-        // FIXME(konishchev): Configure and move to proxy
-        tcp::configure_socket_timeout(tcp_connection, Duration::from_secs(20), None)?;
+        tcp::configure_socket_timeout(tcp_connection, http::CONNECTION_TIMEOUT, Some(
+            TcpKeepalive::new()
+                .with_time(Duration::from_mins(4))
+                .with_interval(Duration::from_secs(12))
+                .with_retries(5)
+        ))?;
         tcp::configure_congestion_control(tcp_connection)?;
 
         Ok(RoutingDecision::Proxy {
@@ -204,11 +209,7 @@ impl ServerConnection {
             spec: ProxySpec {
                 address: config.address,
                 proxy_protocol: None, // Sadly, but sing-box doesn't support proxy protocol
-                // FIXME(konishchev): Drop it when proxy will support it
-                tls: Some(ProxyTlsSpec {
-                    domain: domain.to_owned(),
-                    client_config: self.tls_client_config.clone(),
-                }),
+                tls: None,
             },
         })
     }
@@ -225,6 +226,12 @@ impl ServerConnection {
             });
         }
 
+        // Here we rely on:
+        // * TCP_USER_TIMEOUT to be sure that we don't hang on writes to client connection infinitely (including the
+        //   case when the upstream server wrote the request to socket buffer and shutdown its connection).
+        // * Upstream server timeouts: since we mimic it here and fully trust it, we proxy connections infinitely until
+        //   it decide to close the connection.
+        // * nginx doesn't use TCP keepalive by default, so do we.
         tcp::configure_socket_timeout(connection.get_ref().0, http::CONNECTION_TIMEOUT, None)?;
 
         Ok(RoutingDecision::Proxy {
@@ -323,7 +330,7 @@ impl ServerConnection {
         let address = spec.address;
 
         let name = if let Some(name) = name.as_ref() {
-            info!("[{}] The client is now known as {name:?}. Proxying the request to {address}...", self.name);
+            info!("[{}] The client is now known as {name}. Proxying the request to {address}...", self.name);
             name
         } else {
             trace!("[{}] Proxying the request to {address}...", self.name);

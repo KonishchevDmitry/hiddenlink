@@ -72,11 +72,6 @@ impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
     }
 
     pub async fn handle(self) {
-        // Here we rely on:
-        // * TCP_USER_TIMEOUT to be sure that we don't hang on writes to client connection infinitely.
-        // * Upstream server timeouts: since we mimic it here and fully trust it, we proxy connections infinitely until
-        //   it decide to close the connection.
-
         let preread_data = self.preread_data;
         let (client_reader, client_writer) = tokio::io::split(self.client_connection);
         let (upstream_reader, upstream_writer) = tokio::io::split(Box::into_pin(self.upstream_connection));
