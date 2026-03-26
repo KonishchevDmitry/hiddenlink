@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use log::trace;
+use log::{Level, log};
 use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -19,6 +19,7 @@ use crate::protocols::http;
 use crate::protocols::proxy_protocol::ProxyProtocolHeader;
 
 pub struct ProxySpec {
+    pub log_level: Level,
     pub address: SocketAddr,
     pub proxy_protocol: Option<ProxyProtocolHeader>,
     pub tls: Option<ProxyTlsSpec>,
@@ -31,6 +32,7 @@ pub struct ProxyTlsSpec {
 
 pub struct ProxiedConnection<'a, C: AsyncRead + AsyncWrite> {
     name: &'a str,
+    log_level: Level,
     preread_data: Bytes,
     client_connection: C,
     upstream_connection: Box<dyn UpstreamConnection>,
@@ -65,6 +67,7 @@ impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
 
         Ok(ProxiedConnection {
             name,
+            log_level: spec.log_level,
             preread_data,
             client_connection,
             upstream_connection,
@@ -103,10 +106,10 @@ impl<'a, C: AsyncRead + AsyncWrite> ProxiedConnection<'a, C> {
             },
         ) {
             Ok(_) => {
-                trace!("[{}] The connection has been successfully proxied.", self.name);
+                log!(self.log_level, "[{}] The connection has been successfully proxied.", self.name);
             },
             Err(err) => {
-                trace!("[{}] {err}.", self.name);
+                log!(self.log_level, "[{}] {err}.", self.name);
             },
         }
     }

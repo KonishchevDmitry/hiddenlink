@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use itertools::Itertools;
-use log::{trace, info, warn, error};
+use log::{Level, trace, info, warn, error};
 use rustls::ClientConfig;
 use rustls::server::Acceptor;
 use socket2::TcpKeepalive;
@@ -207,6 +207,7 @@ impl ServerConnection {
             preread_data,
             connection,
             spec: ProxySpec {
+                log_level: Level::Info,
                 address: config.address,
                 proxy_protocol: None, // Sadly, but sing-box doesn't support proxy protocol
                 tls: None,
@@ -239,6 +240,7 @@ impl ServerConnection {
             preread_data,
             connection,
             spec: ProxySpec {
+                log_level: Level::Trace,
                 address: self.upstreams.http.address,
                 proxy_protocol: self.upstreams.http.proxy_protocol.then_some(ProxyProtocolHeader {
                     peer_addr: self.peer_addr,
