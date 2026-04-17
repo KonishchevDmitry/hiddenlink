@@ -9,7 +9,7 @@ use bytes::{Bytes, BytesMut, Buf};
 use log::{trace, error};
 use num::ToPrimitive;
 use prometheus_client::encoding::DescriptorEncoder;
-use rand::{Rng, distr::{Alphanumeric, Distribution, uniform::{SampleRange, SampleUniform}}};
+use rand::{RngExt, distr::{Alphanumeric, Distribution, uniform::{SampleRange, SampleUniform}}};
 use socket2::TcpKeepalive;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;

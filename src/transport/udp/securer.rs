@@ -2,11 +2,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::SystemTime;
 
-use aes::Block;
-use aes::cipher::{BlockDecrypt, BlockEncrypt, BlockSizeUser, KeyInit};
+use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, BlockSizeUser, KeyInit};
 use base64::Engine;
 use bytes::{BufMut, BytesMut};
-use rand::Rng;
+use rand::RngExt;
 use serde::{Serialize, Deserialize};
 use shadowsocks_crypto::CipherKind;
 use validator::Validate;
@@ -82,7 +81,7 @@ impl UdpConnectionSecurer {
         self.session.cipher.encrypt_packet(nonce, payload_and_tag);
 
         debug_assert_eq!(header.len(), BlockCipher::block_size());
-        self.header_cipher.encrypt_block(Block::from_mut_slice(header));
+        self.header_cipher.encrypt_block(header.try_into().unwrap());
     }
 
     pub fn decrypt<'a>(&self, payload: &'a mut [u8]) -> Result<&'a mut [u8], DecryptError> {
@@ -96,7 +95,7 @@ impl UdpConnectionSecurer {
         let (header, payload_and_tag) = payload.split_at_mut(header_size);
 
         debug_assert_eq!(header.len(), BlockCipher::block_size());
-        self.header_cipher.decrypt_block(Block::from_mut_slice(header));
+        self.header_cipher.decrypt_block(header.try_into().unwrap());
 
         let mut last_peer_session = self.peer_session.lock().unwrap();
         let session_id = u64::from_be_bytes(header[0..8].try_into().unwrap());

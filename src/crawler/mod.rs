@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use log::{trace, debug, info, warn, error};
-use rand::Rng;
+use rand::RngExt;
 use reqwest::{Client, StatusCode};
 use rustls::pki_types::DnsName;
 use serde::Deserialize;

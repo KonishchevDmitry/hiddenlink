@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
 use log::{trace, info, warn, error};
 use prometheus_client::encoding::DescriptorEncoder;
-use rand::Rng;
+use rand::RngExt;
 use rustls::ClientConfig;
 use rustls::pki_types::{ServerName, DnsName};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
